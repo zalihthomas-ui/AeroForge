@@ -201,13 +201,98 @@ method), and a cosmetic upstream bug in `xfoil`'s own `__del__` (harmless
 | Geometry Agent + CAD exporters + geometry validity checks | kilo |
 | Design Agent + Aerodynamics Agent | dune |
 
-## Next milestone: v0.5 (not yet scoped)
+## Milestone: v0.5 — Structures Agent (real FEA) + wing airfoil sections (DONE)
 
-Candidates: give the wing geometry a real airfoil cross-section (instead
-of the flat-plate approximation) so the Aerodynamics Agent's NACA
-evaluation can eventually attach to actual wing CAD; or begin Phase 4
-(Structures/FEA) research the same way Phase 3 was approached here —
-evaluate solver options (CalculiX, Code_Aster), root-cause any toolchain
-failures properly (as v0.4 part 2 did) rather than settling immediately,
-and only fall back to a validated surrogate if a genuine, well-documented
-blocker remains.
+Two parallel, non-overlapping tracks, both landed 2026-09-15.
+
+### Structures Agent — Phase 4 research spike, real CalculiX
+
+Mission doc Phase 4: "begin with simple validation cases... Case 1:
+Cantilever beam." Following the same root-cause-don't-settle approach as
+v0.4 part 2:
+
+- **CalculiX (`ccx.exe`) installed via MSYS2's `pacman`**
+  (`mingw-w64-x86_64-calculix-ccx`) — chosen over Code_Aster (needs a
+  ~3GB Salome-Meca install) as the lightest-weight option matching the
+  mission doc's candidate list. Not vendored as a file (unlike XFOIL):
+  it depends on a large MSYS2 runtime DLL stack (openblas, arpack,
+  pastix, scotch) that isn't practical to statically link. Install via
+  `scripts/install_calculix_windows.sh`; located at runtime via
+  `shutil.which` with a default-path fallback.
+- **Found and root-caused a genuine solver hang**: this build's default
+  sparse solver (PaStiX) hangs indefinitely — confirmed on a trivial
+  10-element, 216-equation cantilever beam that should solve in
+  milliseconds (verified by manually killing the stuck process, checking
+  it was genuinely stalled during PaStiX's Scotch matrix-ordering step,
+  not just slow). **Fix**: every generated `.inp` deck's `*STATIC` card
+  must say `SOLVER=SPOOLES` explicitly (CalculiX's classic bundled direct
+  solver) — with it, the same problem solves in ~12ms. Full story in
+  `vendor/calculix/README.md`.
+- `agents/structures/agent.py` — `StructuresAgent.evaluate_cantilever_beam
+  (length_mm, width_mm, height_mm, force_n, ...) -> StructuralResult
+  (tip_deflection_mm, max_bending_stress_mpa, analytical_deflection_mm,
+  deflection_error_pct)`, generating a parametric B31 beam-element `.inp`
+  deck and parsing CalculiX's own `.dat` output (latin-1 encoded — an
+  early parser bug from missing the blank separator line between a header
+  and its data rows was caught and fixed during development).
+- **Validated against exact closed-form Euler-Bernoulli beam theory** —
+  the strongest validation in the repo so far (not an invariant, not a
+  cross-validation between two models, but literal classical mechanics):
+  reference case (1m steel beam, 20×10mm section, 100N tip load) gives FEA
+  deflection 94.95mm vs. analytical 95.24mm, **0.30% error**, consistent
+  with B31 correctly including Timoshenko shear deformation that pure
+  Euler-Bernoulli neglects.
+- `examples/beam/run.py` — runs the reference case, prints FEA vs.
+  analytical side by side.
+
+Explicitly **out of scope**: meshing/analyzing actual 3D CAD solids from
+`agents/geometry` (this uses CalculiX's native 1D beam elements on a
+parametric beam directly, not an imported mesh — that needs a real mesher
+like gmsh) and Code_Aster (heavier install, CalculiX already satisfies the
+mission doc's candidate list).
+
+### Wing airfoil cross-sections — connecting Geometry and Aerodynamics
+
+The wing's flat-plate approximation (v0.2) is replaced with real NACA
+4-digit airfoil cross-sections, reusing `aerosandbox` (already a project
+dependency via the Aerodynamics Agent) rather than reimplementing airfoil
+coordinate generation — the first real connection between the Geometry
+and Aerodynamics agents.
+
+- `agents/design/agent.py` — optional `naca_airfoil` parameter parsed from
+  e.g. "NACA 2412 airfoil" (defaults to 12.0 = NACA 0012 when omitted).
+  Round-tripped through the existing `dict[str, float]` schema with no
+  contract changes: a 4-digit NACA code is stored as a plain float (e.g.
+  2412.0) and reconstructed with `f"{int(value):04d}"` zero-padding.
+- `agents/geometry/wing.py` — lofts between root/tip cross-sections built
+  from real `aerosandbox.Airfoil` coordinates (scaled by chord) instead of
+  flat rectangles, still mirrored about the root for symmetry.
+- Validated with an **exact analytical volume formula** for the
+  quadratically-varying loft cross-section:
+  `V = area_norm · span · (c_root² + c_root·c_tip + c_tip²) / 3` (the
+  frustum-volume integral for a linearly-tapered, self-similar
+  cross-section) — matched to the B-Rep volume within 0.0001%.
+
+Explicitly **out of scope**: twist/washout, and any actual coupling to the
+Aerodynamics Agent's evaluation (the wing now *looks* like a real airfoil
+shape, but nothing yet feeds this geometry into `evaluate_naca_airfoil` or
+vice versa — still separate agents sharing a coordinate source).
+
+97/97 tests passing across both tracks combined.
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections | dune |
+
+## Next milestone: v0.6 (not yet scoped)
+
+Candidates: mesh actual CAD solids (bracket/wing) for real FEA instead of
+CalculiX's native beam elements (needs a real mesher, e.g. gmsh — a
+materially bigger undertaking); couple the Aerodynamics Agent's evaluation
+to the wing's actual airfoil section; or Phase 5 (closed-loop
+optimization) research once there are at least two disciplines
+(aero + structures, both now real) worth optimizing across.
