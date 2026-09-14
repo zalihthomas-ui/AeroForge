@@ -120,52 +120,78 @@ with, neither of which exist yet.
 
 68/68 tests passing.
 
-## Milestone: v0.4 — Aerodynamics Agent research spike (DONE, surrogate)
+## Milestone: v0.4 — Aerodynamics Agent research spike (DONE, real XFOIL + surrogate)
 
 Mission doc Phase 3: "begin with a well-understood benchmark: NACA 0012 →
 CL/CD, validated against published/reference data."
 
-**Solver decision record:** the mission doc lists OpenFOAM, SU2, XFOIL as
-candidates. We evaluated XFOIL first (lightest-weight, matches the 2D
-NACA 0012 benchmark exactly):
+**Solver decision record, part 1 (2026-09-14):** the mission doc lists
+OpenFOAM, SU2, XFOIL as candidates. `pip install xfoil` failed with an
+opaque CMake configure error under the MinGW Makefiles generator, even
+with `gfortran` present via MinGW64, and WSL wasn't installed. Rather than
+sink unbounded time into native build debugging, we shipped v0.4 with
+**NeuralFoil** — a pip-installable neural-network aerodynamic surrogate,
+published and validated against XFOIL/experimental data — clearly
+disclaimed as not a first-principles solver.
 
-1. `pip install xfoil` (compiled-from-source Fortran module, DARcorporation/
-   xfoil-python) fails to build on this machine — CMake configure step
-   errors under the MinGW Makefiles generator, even with `gfortran`
-   already present via MinGW64. Root cause not chased further (native
-   build-toolchain debugging, unbounded time cost).
-2. WSL is not installed (`wsl --install` needs a reboot/admin — not done
-   without an explicit ask).
-3. A prebuilt third-party XFOIL `.exe` (e.g. from a GitHub repo's bundled
-   binary) was considered and rejected for now — running unverified
-   third-party native code is a materially different trust decision than
-   installing from PyPI.
+**Solver decision record, part 2 — real XFOIL, resolved (2026-09-15):**
+asked to actually fix the toolchain rather than settle. Root-caused
+properly instead of guessing:
 
-**Chosen instead: NeuralFoil** (`agents/aerodynamics/agent.py`) — a
-pip-installable, no-compiler-needed neural-network aerodynamic surrogate,
-published and validated against XFOIL/experimental data. This is
-explicitly **not** XFOIL/OpenFOAM/SU2 — every file that uses it says so.
-Real first-principles solver integration remains future work, to be
-revisited once the toolchain/WSL question is deliberately resolved.
+1. **Missing `mingw32-make`**: MinGW64 had `gcc`/`g++`/`gfortran` but not
+   `mingw32-make.exe`, which CMake's `MinGW Makefiles` generator requires
+   to even configure. Fixed: `pacman -S mingw-w64-x86_64-make`.
+2. **The PyPI sdist for `xfoil` 1.1.1 is broken** — comparing it to the
+   GitHub repo, the sdist is missing `CMakeLists.txt` and the entire
+   `src/` Fortran tree entirely (an upstream packaging bug, not
+   environment-specific — `pip install xfoil` would fail this way on any
+   platform). Confirmed by extracting both and diffing. Worked around by
+   building directly from `github.com/DARcorporation/xfoil-python`
+   instead of PyPI.
+3. **setuptools defaults to the `msvc` compiler class on Windows**
+   regardless of whether Visual Studio is installed, which made CMake try
+   to use a nonexistent VS generator. Fixed by pinning
+   `[build_ext]\ncompiler=mingw32` in `setup.cfg`.
+4. **The resulting DLL depended on MinGW runtime DLLs**
+   (`libgfortran`/`libgcc`/`libwinpthread`) that Windows/Python 3.8+'s
+   `ctypes.cdll.LoadLibrary` won't find via `PATH` alone (dependent-DLL
+   search was restricted for security). Fixed by statically linking
+   (`-DCMAKE_SHARED_LINKER_FLAGS=-static`), producing a wheel that depends
+   only on `KERNEL32.dll`/`msvcrt.dll` — no runtime PATH tricks needed.
+
+Real XFOIL now runs and gives genuine Newton-iteration boundary-layer
+convergence output, not a surrogate estimate. The built wheel is vendored
+at `vendor/xfoil/` (Windows x64 + CPython 3.13 only — see its README) with
+a reproducible build script at `scripts/build_xfoil_windows.sh`, since the
+PyPI package can't be relied on. **NeuralFoil is kept as the always-
+available default backend** (works on CI/ubuntu-latest and any platform);
+real XFOIL is an opt-in `backend="xfoil"` parameter, feature-detected via
+`agents.aerodynamics.agent.XFOIL_AVAILABLE`.
 
 Scope:
 
 - `agents/aerodynamics/agent.py` — `AerodynamicsAgent.evaluate_naca_airfoil
-  (designation, alpha_deg, reynolds) -> AeroResult(cl, cd, cm, l_over_d,
-  confidence)`, wrapping `aerosandbox.Airfoil` + `neuralfoil.get_aero_from_airfoil`.
-- Validated against **physically-grounded invariants**, not memorized
-  reference numbers we couldn't independently verify: NACA 0012 (symmetric)
-  gives ~zero CL/CM at alpha=0; CL increases monotonically over a small
-  positive alpha sweep; CD is always positive; a cambered airfoil (e.g.
-  NACA 2412) gives positive lift at alpha=0.
-- `examples/airfoil/run.py` — NACA 0012 alpha sweep (0–10°, Re=1e6).
-  Verified 2026-09-14: CL≈0 at alpha=0, monotonic lift increase, L/D peaks
-  around alpha=8° (~76) then falls off toward alpha=10° — textbook-shaped
-  polar, consistent with the surrogate being physically sound.
+  (designation, alpha_deg, reynolds, backend="neuralfoil"|"xfoil") ->
+  AeroResult(cl, cd, cm, l_over_d, confidence, backend)`.
+- Validated two ways: **physically-grounded invariants** (NACA 0012
+  symmetric CL/CM≈0 at alpha=0, monotonic lift in the linear regime,
+  positive drag, cambered-airfoil positive zero-alpha lift) for both
+  backends, plus a **cross-validation test**
+  (`test_xfoil_and_neuralfoil_cross_validate_on_naca0012`) checking the
+  real solver and the surrogate agree within 0.05 CL / 0.005 CD across a
+  0–8° sweep — the strongest validation available without a specific
+  published reference table on hand.
+- `examples/airfoil/run.py` — NACA 0012 alpha sweep (0–10°, Re=1e6),
+  printing both backends side by side. Verified 2026-09-15: they agree
+  within ~1-2% across the whole sweep.
 
 Explicitly **out of scope**: wiring this into the CAD loop (the wing
 geometry has no airfoil section yet — flat-plate approximation, see v0.2),
-and any first-principles solver. 76/76 tests passing.
+OpenFOAM/SU2 (3D CFD — a materially bigger undertaking than a 2D panel
+method), and a cosmetic upstream bug in `xfoil`'s own `__del__` (harmless
+`ctypes`/`PermissionError` warning on cleanup, documented in
+`vendor/xfoil/README.md`, not patched since it's third-party code).
+81/81 tests passing.
 
 ## Ownership (current sprint)
 
@@ -179,9 +205,9 @@ and any first-principles solver. 76/76 tests passing.
 
 Candidates: give the wing geometry a real airfoil cross-section (instead
 of the flat-plate approximation) so the Aerodynamics Agent's NACA
-evaluation can eventually attach to actual wing CAD; resolve the
-XFOIL/WSL toolchain question deliberately as its own scoped task; or begin
-Phase 4 (Structures/FEA) research the same way Phase 3 was approached here
-— evaluate solver options, document constraints honestly, choose a
-pragmatic validated path rather than forcing the exact tool list if it
-doesn't fit this environment.
+evaluation can eventually attach to actual wing CAD; or begin Phase 4
+(Structures/FEA) research the same way Phase 3 was approached here —
+evaluate solver options (CalculiX, Code_Aster), root-cause any toolchain
+failures properly (as v0.4 part 2 did) rather than settling immediately,
+and only fall back to a validated surrogate if a genuine, well-documented
+blocker remains.

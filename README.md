@@ -33,9 +33,11 @@ Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / 
 for two components: a mounting **bracket** and a flat-plate **wing**
 planform (see `examples/bracket/`, `examples/wing/`) — plus a standalone
 2D **Aerodynamics Agent** (`examples/airfoil/`) evaluating NACA airfoils
-via NeuralFoil, a validated neural surrogate, *not* real XFOIL/OpenFOAM/SU2
-(those failed to build on this machine's toolchain — see the roadmap's
-decision record) and not yet wired into the CAD loop.
+via NeuralFoil (a validated neural surrogate, always available) or real
+**XFOIL** (the actual Fortran solver, vendored at `vendor/xfoil/` for
+Windows x64 + CPython 3.13 — the PyPI package is broken upstream; see the
+roadmap's decision record for how this was fixed). Not yet wired into the
+CAD loop.
 
 FEA, manufacturing analysis, optimization, and any aerodynamic realism for
 the wing are real, unimplemented future phases — not stubbed out as if
@@ -64,6 +66,9 @@ python -m venv .venv
 .venv/Scripts/activate         # Windows; use `source .venv/bin/activate` on Unix
 pip install -r backend/requirements.txt
 pytest
+
+# optional: real XFOIL backend (Windows x64 + CPython 3.13 only)
+pip install vendor/xfoil/xfoil-1.1.1-cp313-cp313-win_amd64.whl
 
 python examples/bracket/run.py
 python examples/wing/run.py

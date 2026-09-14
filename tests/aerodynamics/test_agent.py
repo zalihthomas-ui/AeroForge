@@ -103,3 +103,9 @@ def test_reject_non_positive_reynolds(agent: AerodynamicsAgent):
 
     with pytest.raises(AerodynamicsEvaluationError):
         agent.evaluate_naca_airfoil("naca0012", alpha_deg=0.0, reynolds=-1000.0)
+
+
+def test_reject_unknown_backend(agent: AerodynamicsAgent):
+    """An unrecognized backend name must raise regardless of platform/xfoil availability."""
+    with pytest.raises(AerodynamicsEvaluationError, match="Unknown backend"):
+        agent.evaluate_naca_airfoil("naca0012", alpha_deg=0.0, reynolds=1e6, backend="openfoam")

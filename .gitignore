@@ -23,10 +23,13 @@ frontend/build/
 /design/
 
 # Stray empty files occasionally dropped in the repo root by build123d/OCCT
+# or the Fortran runtime (XFOIL writing to an unopened default unit number)
 # during test runs on Windows (harmless, but never intentional content).
 /build123d
 /STEP
 /exporters
+/0
+fort.*
 
 # Env / secrets
 .env
