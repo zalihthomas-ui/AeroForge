@@ -18,9 +18,30 @@ from engineering.requirements.schema import (
 
 
 class UnrecognizedRequirementError(ValueError):
-    """Raised when an engineering requirement cannot be parsed or is unsupported."""
+    """Raised when an engineering requirement cannot be parsed or component is unsupported."""
 
     pass
+
+
+class IncompleteRequirementError(UnrecognizedRequirementError):
+    """Raised when a component is recognized but required parameters are missing."""
+
+    def __init__(
+        self,
+        component: str,
+        missing: list[str],
+        provided: dict[str, float],
+        message: str | None = None,
+    ) -> None:
+        self.component = component
+        self.missing = missing
+        self.provided = provided
+        if message is None:
+            message = (
+                f"Incomplete {component} requirement: missing parameter(s) {missing}. "
+                f"Provided: {provided}"
+            )
+        super().__init__(message)
 
 
 # Mapping for word-based numbers up to twenty
@@ -59,6 +80,12 @@ _DIM_3WAY_PATTERN = re.compile(
     r"(?P<l>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:[xX*×\u00d7]|\bby\b)\s*"
     r"(?P<w>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:[xX*×\u00d7]|\bby\b)\s*"
     r"(?P<t>\d+(?:\.\d+)?)\s*(?:mm)?",
+    re.IGNORECASE,
+)
+
+_DIM_2WAY_PATTERN = re.compile(
+    r"(?P<l>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:[xX*×\u00d7]|\bby\b)\s*"
+    r"(?P<w>\d+(?:\.\d+)?)\s*(?:mm)?",
     re.IGNORECASE,
 )
 
@@ -151,8 +178,9 @@ class DesignAgent:
             EngineeringSpec: The validated and structured engineering specification.
 
         Raises:
+            IncompleteRequirementError: If a component is recognized but required parameters are missing.
             UnrecognizedRequirementError: If input does not match a known component pattern
-                                          or is missing essential parameters.
+                                          or has invalid parameter values.
         """
         if not requirement_text or not requirement_text.strip():
             raise UnrecognizedRequirementError("Requirement text cannot be empty.")
@@ -170,7 +198,7 @@ class DesignAgent:
         # Unrecognized component
         raise UnrecognizedRequirementError(
             f"Could not recognize component pattern in requirement: '{text}'. "
-            "Supported components in v0.2: 'bracket', 'wing'."
+            "Supported components in v0.3: 'bracket', 'wing'."
         )
 
     def _is_bracket_requirement(self, text: str) -> bool:
@@ -209,20 +237,51 @@ class DesignAgent:
             width = float(match_3way.group("w"))
             thickness = float(match_3way.group("t"))
         else:
-            # 2. Try named dimension matches
-            match_l = _LENGTH_NAMED_PATTERN.search(text)
-            match_w = _WIDTH_NAMED_PATTERN.search(text)
-            match_t = _THICKNESS_NAMED_PATTERN.search(text)
+            # 2. Try 2-way dimension match (e.g. 100 x 80 mm)
+            match_2way = _DIM_2WAY_PATTERN.search(text)
+            if match_2way:
+                length = float(match_2way.group("l"))
+                width = float(match_2way.group("w"))
 
-            if match_l and match_w and match_t:
-                length = float(match_l.group("val"))
-                width = float(match_w.group("val"))
-                thickness = float(match_t.group("val"))
+            # 3. Try named dimension matches
+            if length is None:
+                match_l = _LENGTH_NAMED_PATTERN.search(text)
+                if match_l:
+                    length = float(match_l.group("val"))
 
-        if length is None or width is None or thickness is None:
-            raise UnrecognizedRequirementError(
-                f"Incomplete bracket dimensions in requirement: '{text}'. "
-                "Length, width, and thickness must all be specified (e.g. '100 x 80 x 5 mm')."
+            if width is None:
+                match_w = _WIDTH_NAMED_PATTERN.search(text)
+                if match_w:
+                    width = float(match_w.group("val"))
+
+            if thickness is None:
+                match_t = _THICKNESS_NAMED_PATTERN.search(text)
+                if match_t:
+                    thickness = float(match_t.group("val"))
+
+        provided: dict[str, float] = {}
+        missing: list[str] = []
+
+        if length is not None:
+            provided["length"] = length
+        else:
+            missing.append("length")
+
+        if width is not None:
+            provided["width"] = width
+        else:
+            missing.append("width")
+
+        if thickness is not None:
+            provided["thickness"] = thickness
+        else:
+            missing.append("thickness")
+
+        if missing:
+            raise IncompleteRequirementError(
+                component="bracket",
+                missing=missing,
+                provided=provided,
             )
 
         if length <= 0 or width <= 0 or thickness <= 0:
@@ -324,30 +383,46 @@ class DesignAgent:
         match_sweep = _SWEEP_PATTERN.search(text)
         match_dihedral = _DIHEDRAL_PATTERN.search(text)
 
+        provided: dict[str, float] = {}
         missing: list[str] = []
-        if not match_span:
-            missing.append("span")
-        if not match_root:
+
+        if match_span:
+            provided["wing_span"] = float(match_span.group("val"))
+        else:
+            missing.append("wing_span")
+
+        if match_root:
+            provided["root_chord"] = float(match_root.group("val"))
+        else:
             missing.append("root_chord")
-        if not match_tip:
+
+        if match_tip:
+            provided["tip_chord"] = float(match_tip.group("val"))
+        else:
             missing.append("tip_chord")
-        if not match_sweep:
+
+        if match_sweep:
+            provided["sweep"] = float(match_sweep.group("val"))
+        else:
             missing.append("sweep")
-        if not match_dihedral:
+
+        if match_dihedral:
+            provided["dihedral"] = float(match_dihedral.group("val"))
+        else:
             missing.append("dihedral")
 
         if missing:
-            raise UnrecognizedRequirementError(
-                f"Incomplete wing parameters in requirement: '{text}'. "
-                f"Missing parameter(s): {', '.join(missing)}. All 5 parameters "
-                "(span, root_chord, tip_chord, sweep, dihedral) must be specified."
+            raise IncompleteRequirementError(
+                component="wing",
+                missing=missing,
+                provided=provided,
             )
 
-        wing_span = float(match_span.group("val"))
-        root_chord = float(match_root.group("val"))
-        tip_chord = float(match_tip.group("val"))
-        sweep = float(match_sweep.group("val"))
-        dihedral = float(match_dihedral.group("val"))
+        wing_span = provided["wing_span"]
+        root_chord = provided["root_chord"]
+        tip_chord = provided["tip_chord"]
+        sweep = provided["sweep"]
+        dihedral = provided["dihedral"]
 
         if wing_span <= 0 or root_chord <= 0 or tip_chord <= 0:
             raise UnrecognizedRequirementError(
