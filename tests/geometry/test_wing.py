@@ -1,17 +1,10 @@
-"""Tests for the wing Geometry Agent: valid geometry generation and
-rejection of invalid parameters.
-
-Reminder: this is a flat-plate planform approximation (see wing.py's
-module docstring) — these tests check it's a valid, correctly-sized
-solid, not that it's aerodynamically meaningful.
-"""
+"""Tests for the wing Geometry Agent: valid geometry generation with real NACA airfoil sections."""
 
 from __future__ import annotations
 
-import math
-
 import pytest
 from build123d import Part
+import aerosandbox as asb
 
 from agents.geometry.agent import GeometryAgent
 from agents.geometry.validation import GeometryValidationError
@@ -25,17 +18,21 @@ REFERENCE_PARAMETERS = {
     "dihedral": 4.0,
 }
 
-_THICKNESS_RATIO = 0.08
-
 
 def _spec(**parameters: float) -> EngineeringSpec:
     return EngineeringSpec(component="wing", parameters=parameters)
 
 
-def _expected_volume(wing_span: float, root_chord: float, tip_chord: float) -> float:
-    half_span = wing_span / 2
-    thickness = root_chord * _THICKNESS_RATIO
-    return 2 * thickness * half_span * (root_chord + tip_chord) / 2
+def _expected_volume(
+    wing_span: float,
+    root_chord: float,
+    tip_chord: float,
+    naca_airfoil: float = 12.0,
+) -> float:
+    naca_digits = f"{int(naca_airfoil):04d}"
+    af = asb.Airfoil(f"naca{naca_digits}").repanel(n_points_per_side=40)
+    area_norm = af.area()
+    return area_norm * wing_span * (root_chord**2 + root_chord * tip_chord + tip_chord**2) / 3.0
 
 
 def test_reference_wing_generates_a_valid_solid() -> None:
@@ -70,6 +67,43 @@ def test_wing_is_symmetric_about_the_root() -> None:
     assert bbox.max.Y == pytest.approx(half_span, rel=1e-3)
 
 
+def test_cambered_naca2412_wing_generates_valid_solid() -> None:
+    params = {**REFERENCE_PARAMETERS, "naca_airfoil": 2412.0}
+    part = GeometryAgent().generate(_spec(**params))
+
+    assert isinstance(part, Part)
+    assert part.is_valid
+    assert part.is_manifold
+    assert part.volume > 0
+    assert part.volume == pytest.approx(
+        _expected_volume(
+            REFERENCE_PARAMETERS["wing_span"],
+            REFERENCE_PARAMETERS["root_chord"],
+            REFERENCE_PARAMETERS["tip_chord"],
+            naca_airfoil=2412.0,
+        ),
+        rel=1e-3,
+    )
+
+
+def test_cambered_naca4412_wing_generates_valid_solid() -> None:
+    params = {**REFERENCE_PARAMETERS, "naca_airfoil": 4412.0}
+    part = GeometryAgent().generate(_spec(**params))
+
+    assert isinstance(part, Part)
+    assert part.is_valid
+    assert part.is_manifold
+    assert part.volume == pytest.approx(
+        _expected_volume(
+            REFERENCE_PARAMETERS["wing_span"],
+            REFERENCE_PARAMETERS["root_chord"],
+            REFERENCE_PARAMETERS["tip_chord"],
+            naca_airfoil=4412.0,
+        ),
+        rel=1e-3,
+    )
+
+
 @pytest.mark.parametrize(
     ("sweep", "dihedral"),
     [(0.0, 0.0), (30.0, 0.0), (0.0, 15.0), (-20.0, -10.0), (45.0, 20.0)],
@@ -87,8 +121,7 @@ def test_untapered_wing_is_a_rectangular_planform() -> None:
     part = GeometryAgent().generate(_spec(**params))
 
     root_chord = REFERENCE_PARAMETERS["root_chord"]
-    thickness = root_chord * _THICKNESS_RATIO
-    expected_volume = root_chord * REFERENCE_PARAMETERS["wing_span"] * thickness
+    expected_volume = _expected_volume(REFERENCE_PARAMETERS["wing_span"], root_chord, root_chord)
     assert part.volume == pytest.approx(expected_volume, rel=1e-3)
 
 

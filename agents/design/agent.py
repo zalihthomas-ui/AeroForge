@@ -150,6 +150,10 @@ _DIHEDRAL_PATTERN = re.compile(
     r"\b(?:dihedral[_\s]*angle|dihedral)\s*[:=]?\s*(?P<val>-?\d+(?:\.\d+)?)\s*(?:deg|degrees|°)?\b",
     re.IGNORECASE,
 )
+_NACA_AIRFOIL_PATTERN = re.compile(
+    r"\b(?:naca\s*(?P<code>\d{4})|airfoil\s*[:=]?\s*(?:naca\s*)?(?P<code2>\d{4}))\b",
+    re.IGNORECASE,
+)
 
 
 def _parse_count_or_num(token: str) -> float:
@@ -440,12 +444,21 @@ class DesignAgent:
                 f"Wing dihedral angle must be within [-45, 45] degrees. Got dihedral={dihedral}."
             )
 
+        # Optional airfoil parameter (defaults to 12.0 / NACA 0012)
+        match_airfoil = _NACA_AIRFOIL_PATTERN.search(text)
+        if match_airfoil:
+            code_str = match_airfoil.group("code") or match_airfoil.group("code2")
+            naca_airfoil = float(code_str)
+        else:
+            naca_airfoil = 12.0
+
         parameters: dict[str, float] = {
             "wing_span": wing_span,
             "root_chord": root_chord,
             "tip_chord": tip_chord,
             "sweep": sweep,
             "dihedral": dihedral,
+            "naca_airfoil": naca_airfoil,
         }
 
         requirements: list[Requirement] = [
@@ -454,6 +467,7 @@ class DesignAgent:
             Requirement(name="tip_chord", value=tip_chord, unit="mm"),
             Requirement(name="sweep", value=sweep, unit="deg"),
             Requirement(name="dihedral", value=dihedral, unit="deg"),
+            Requirement(name="naca_airfoil", value=naca_airfoil, unit=None),
         ]
 
         constraints: list[Constraint] = [
@@ -462,6 +476,7 @@ class DesignAgent:
             Constraint(name="tip_chord", operator="==", value=tip_chord),
             Constraint(name="sweep", operator="==", value=sweep),
             Constraint(name="dihedral", operator="==", value=dihedral),
+            Constraint(name="naca_airfoil", operator="==", value=naca_airfoil),
         ]
 
         metadata: dict[str, Any] = {
