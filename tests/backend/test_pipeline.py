@@ -38,6 +38,21 @@ def test_design_endpoint_rejects_unrecognized_requirement():
     response = client.post("/design", json={"requirement": "not an engineering thing"})
 
     assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "unrecognized_requirement"
+
+
+def test_design_endpoint_reports_missing_parameters():
+    client = TestClient(app)
+    response = client.post(
+        "/design", json={"requirement": "Create a 100 x 80 mm mounting bracket"}
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["error"] == "incomplete_requirement"
+    assert detail["component"] == "bracket"
+    assert detail["missing"] == ["thickness"]
+    assert detail["provided"] == {"length": 100.0, "width": 80.0}
 
 
 def test_design_endpoint_rejects_invalid_geometry():

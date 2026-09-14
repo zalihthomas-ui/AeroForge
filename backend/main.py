@@ -10,14 +10,14 @@ import tempfile
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from agents.design.agent import UnrecognizedRequirementError
+from agents.design.agent import IncompleteRequirementError, UnrecognizedRequirementError
 from agents.geometry.validation import GeometryValidationError
 from backend.pipeline import run_pipeline
 
 app = FastAPI(
     title="AEROFORGE",
-    description="Prompt -> Design Agent -> Geometry Agent -> STEP/STL (v0.1 milestone)",
-    version="0.1.0",
+    description="Prompt -> Design Agent -> Geometry Agent -> STEP/STL",
+    version="0.3.0",
 )
 
 
@@ -43,10 +43,27 @@ def design(request: DesignRequest) -> DesignResponse:
     output_dir = tempfile.mkdtemp(prefix="aeroforge_")
     try:
         result = run_pipeline(request.requirement, output_dir)
+    except IncompleteRequirementError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "incomplete_requirement",
+                "component": exc.component,
+                "missing": exc.missing,
+                "provided": exc.provided,
+                "message": str(exc),
+            },
+        ) from exc
     except UnrecognizedRequirementError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "unrecognized_requirement", "message": str(exc)},
+        ) from exc
     except GeometryValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_geometry", "message": str(exc)},
+        ) from exc
 
     return DesignResponse(
         component=result.spec.component,

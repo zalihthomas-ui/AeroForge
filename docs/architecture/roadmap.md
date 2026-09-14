@@ -96,13 +96,37 @@ time.
 | Geometry Agent + CAD exporters + geometry validity checks | kilo |
 | Design Agent + requirement/spec schema | dune |
 
-## Next milestone: v0.3 (not yet scoped)
+## Milestone: v0.3 — structured missing-parameter detection (DONE)
 
-Candidates, to be decided before assigning: (a) Design Agent as engineering
-project manager (mission doc §7 — missing-parameter detection, requirement
-decomposition) still without touching simulation; (b) begin Phase 3 (CFD)
-research spike — evaluate OpenFOAM vs. SU2 vs. XFOIL against the NACA 0012
-reference case per mission doc Phase 3, as research only, no autonomous
-optimization until validated. (b) is a materially bigger, slower-moving
-piece of work than anything done so far and should be scoped deliberately
-before starting.
+Mission doc §7 lists "identify missing parameters" as a Design Agent
+responsibility distinct from general requirement decomposition. v0.3 makes
+that a first-class, programmatic outcome rather than just an error string:
+
+- `IncompleteRequirementError(component, missing, provided)` — raised when
+  a component (bracket/wing) is recognized but required parameters are
+  absent, as opposed to the general `UnrecognizedRequirementError` for a
+  component that isn't recognized at all. Callers (e.g. a future UI) can
+  now prompt for exactly the missing fields instead of restating the whole
+  requirement.
+- `POST /design` returns a structured 422 body
+  (`{"error": "incomplete_requirement", "component", "missing", "provided"}`)
+  distinct from `unrecognized_requirement` and `invalid_geometry`.
+
+Explicitly **out of scope**: the rest of mission doc §7's PM
+responsibilities (decompose problems, assign tasks, coordinate agents,
+monitor simulations, resolve conflicts, determine iteration) — those need
+either multiple components interacting or a simulation agent to coordinate
+with, neither of which exist yet.
+
+68/68 tests passing.
+
+## Next milestone: v0.4 (not yet scoped)
+
+Candidates, to be decided before assigning: further Design Agent PM
+depth (needs a second interacting agent to "coordinate" with — not much
+more to add solo), a third geometry component, or beginning Phase 3 (CFD)
+as a research spike — evaluate OpenFOAM vs. SU2 vs. XFOIL against the NACA
+0012 reference case per mission doc Phase 3, research only, no autonomous
+optimization until validated. The CFD option is a materially bigger,
+slower-moving piece of work than anything done so far and should be scoped
+deliberately before starting.

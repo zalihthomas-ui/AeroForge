@@ -22,6 +22,12 @@ frontend/build/
 !examples/**/reference/*.step
 /design/
 
+# Stray empty files occasionally dropped in the repo root by build123d/OCCT
+# during test runs on Windows (harmless, but never intentional content).
+/build123d
+/STEP
+/exporters
+
 # Env / secrets
 .env
 .env.*
