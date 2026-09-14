@@ -54,7 +54,7 @@ _NUM_WORDS_PATTERN = (
     r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|\d+)"
 )
 
-# Regex patterns for dimensions
+# Regex patterns for bracket dimensions
 _DIM_3WAY_PATTERN = re.compile(
     r"(?P<l>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:[xX*×\u00d7]|\bby\b)\s*"
     r"(?P<w>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:[xX*×\u00d7]|\bby\b)\s*"
@@ -75,7 +75,7 @@ _THICKNESS_NAMED_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Regex patterns for holes
+# Regex patterns for bracket holes
 _HOLE_COUNT_DIAM_PATTERN = re.compile(
     rf"\b(?P<count>{_NUM_WORDS_PATTERN})\s*(?:x|-)?\s*(?P<diam>\d+(?:\.\d+)?)\s*(?:mm)?\s*(?:mounting\s*)?holes?\b",
     re.IGNORECASE,
@@ -99,6 +99,28 @@ _HOLE_COUNT_EXPLICIT_PATTERN = re.compile(
 
 _HOLE_DIAM_EXPLICIT_PATTERN = re.compile(
     r"\b(?:hole[_\s]*diameter|hole[_\s]*diam|hole[_\s]*size)\s*[:=]?\s*(?P<val>\d+(?:\.\d+)?)\s*(?:mm)?\b",
+    re.IGNORECASE,
+)
+
+# Regex patterns for wing parameters
+_WING_SPAN_PATTERN = re.compile(
+    r"\b(?:wing[_\s]*span|wingspan|span)\s*[:=]?\s*(?P<val>-?\d+(?:\.\d+)?)\s*(?:mm)?\b",
+    re.IGNORECASE,
+)
+_ROOT_CHORD_PATTERN = re.compile(
+    r"\b(?:root[_\s]*chord|root)\s*[:=]?\s*(?P<val>-?\d+(?:\.\d+)?)\s*(?:mm)?\b",
+    re.IGNORECASE,
+)
+_TIP_CHORD_PATTERN = re.compile(
+    r"\b(?:tip[_\s]*chord|tip)\s*[:=]?\s*(?P<val>-?\d+(?:\.\d+)?)\s*(?:mm)?\b",
+    re.IGNORECASE,
+)
+_SWEEP_PATTERN = re.compile(
+    r"\b(?:leading[_\s-]*edge[_\s]*sweep|sweep[_\s]*angle|le[_\s]*sweep|sweep)\s*[:=]?\s*(?P<val>-?\d+(?:\.\d+)?)\s*(?:deg|degrees|°)?\b",
+    re.IGNORECASE,
+)
+_DIHEDRAL_PATTERN = re.compile(
+    r"\b(?:dihedral[_\s]*angle|dihedral)\s*[:=]?\s*(?P<val>-?\d+(?:\.\d+)?)\s*(?:deg|degrees|°)?\b",
     re.IGNORECASE,
 )
 
@@ -141,10 +163,14 @@ class DesignAgent:
         if self._is_bracket_requirement(text):
             return self._parse_bracket(text)
 
+        # Check for wing component pattern
+        if self._is_wing_requirement(text):
+            return self._parse_wing(text)
+
         # Unrecognized component
         raise UnrecognizedRequirementError(
             f"Could not recognize component pattern in requirement: '{text}'. "
-            "Supported components in v0.1: 'bracket'."
+            "Supported components in v0.2: 'bracket', 'wing'."
         )
 
     def _is_bracket_requirement(self, text: str) -> bool:
@@ -158,6 +184,17 @@ class DesignAgent:
             "flat bracket",
         ]
         return any(indicator in text_lower for indicator in bracket_indicators)
+
+    def _is_wing_requirement(self, text: str) -> bool:
+        """Determine if requirement text is describing a wing."""
+        text_lower = text.lower()
+        wing_indicators = [
+            "wing",
+            "uav wing",
+            "aircraft wing",
+            "aerodynamic wing",
+        ]
+        return any(indicator in text_lower for indicator in wing_indicators)
 
     def _parse_bracket(self, text: str) -> EngineeringSpec:
         """Extract bracket dimensions and hole parameters from text."""
@@ -272,6 +309,95 @@ class DesignAgent:
 
         return EngineeringSpec(
             component="bracket",
+            requirements=requirements,
+            constraints=constraints,
+            objectives=[],
+            parameters=parameters,
+            metadata=metadata,
+        )
+
+    def _parse_wing(self, text: str) -> EngineeringSpec:
+        """Extract wing parameters from text."""
+        match_span = _WING_SPAN_PATTERN.search(text)
+        match_root = _ROOT_CHORD_PATTERN.search(text)
+        match_tip = _TIP_CHORD_PATTERN.search(text)
+        match_sweep = _SWEEP_PATTERN.search(text)
+        match_dihedral = _DIHEDRAL_PATTERN.search(text)
+
+        missing: list[str] = []
+        if not match_span:
+            missing.append("span")
+        if not match_root:
+            missing.append("root_chord")
+        if not match_tip:
+            missing.append("tip_chord")
+        if not match_sweep:
+            missing.append("sweep")
+        if not match_dihedral:
+            missing.append("dihedral")
+
+        if missing:
+            raise UnrecognizedRequirementError(
+                f"Incomplete wing parameters in requirement: '{text}'. "
+                f"Missing parameter(s): {', '.join(missing)}. All 5 parameters "
+                "(span, root_chord, tip_chord, sweep, dihedral) must be specified."
+            )
+
+        wing_span = float(match_span.group("val"))
+        root_chord = float(match_root.group("val"))
+        tip_chord = float(match_tip.group("val"))
+        sweep = float(match_sweep.group("val"))
+        dihedral = float(match_dihedral.group("val"))
+
+        if wing_span <= 0 or root_chord <= 0 or tip_chord <= 0:
+            raise UnrecognizedRequirementError(
+                f"Wing dimensions must be strictly positive. Got wing_span={wing_span}, "
+                f"root_chord={root_chord}, tip_chord={tip_chord}."
+            )
+
+        if sweep < -45.0 or sweep > 45.0:
+            raise UnrecognizedRequirementError(
+                f"Wing sweep angle must be within [-45, 45] degrees. Got sweep={sweep}."
+            )
+
+        if dihedral < -45.0 or dihedral > 45.0:
+            raise UnrecognizedRequirementError(
+                f"Wing dihedral angle must be within [-45, 45] degrees. Got dihedral={dihedral}."
+            )
+
+        parameters: dict[str, float] = {
+            "wing_span": wing_span,
+            "root_chord": root_chord,
+            "tip_chord": tip_chord,
+            "sweep": sweep,
+            "dihedral": dihedral,
+        }
+
+        requirements: list[Requirement] = [
+            Requirement(name="wing_span", value=wing_span, unit="mm"),
+            Requirement(name="root_chord", value=root_chord, unit="mm"),
+            Requirement(name="tip_chord", value=tip_chord, unit="mm"),
+            Requirement(name="sweep", value=sweep, unit="deg"),
+            Requirement(name="dihedral", value=dihedral, unit="deg"),
+        ]
+
+        constraints: list[Constraint] = [
+            Constraint(name="wing_span", operator="==", value=wing_span),
+            Constraint(name="root_chord", operator="==", value=root_chord),
+            Constraint(name="tip_chord", operator="==", value=tip_chord),
+            Constraint(name="sweep", operator="==", value=sweep),
+            Constraint(name="dihedral", operator="==", value=dihedral),
+        ]
+
+        metadata: dict[str, Any] = {
+            "raw_requirement": text,
+            "unit": "mm",
+            "angle_unit": "deg",
+            "parser": "rule_based",
+        }
+
+        return EngineeringSpec(
+            component="wing",
             requirements=requirements,
             constraints=constraints,
             objectives=[],
