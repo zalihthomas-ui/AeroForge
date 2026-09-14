@@ -56,10 +56,53 @@ from the mission doc's exact Phase 1 requirement string. The FastAPI
 `POST /design` endpoint wraps the same pipeline and correctly returns 422
 for both unrecognized requirements and geometrically invalid parameters.
 
-## Next milestone: v0.2 — Design Agent as engineering PM (mission doc Phase 2)
+## Milestone: v0.2 — second component: wing planform (DONE)
 
-Not started. Would expand `agents/design` beyond bracket-shaped parsing
-toward the fuller "identify missing parameters / decompose problems /
-coordinate agents" responsibilities in mission doc §7, and/or extend
-`agents/geometry` to a second component (e.g. a simple wing planform) before
-touching any simulation phase.
+```text
+"Create a wing with span 1800mm, root chord 240mm, tip chord 140mm,
+ sweep 12 degrees, dihedral 4 degrees."
+        → Design Agent → Geometry Agent → build123d → STEP / STL
+```
+
+Scope:
+
+- `agents/design/agent.py` — wing parser (`wing_span`, `root_chord`,
+  `tip_chord`, `sweep`, `dihedral`), same rule-based approach as bracket.
+- `agents/geometry/wing.py` — a **flat-plate planform approximation**
+  (constant-thickness slab, tapered/swept/dihedral, mirrored for symmetry).
+  Explicitly not an aerodynamically real wing — no airfoil section, camber,
+  or twist. That requires an Aerodynamics Agent, which doesn't exist yet.
+- `agents/geometry/validation.py` generalized: `validate_solid` /
+  `validate_expected_volume` are now component-agnostic, reused by both
+  bracket and wing.
+- `examples/wing/run.py` — end-to-end demonstration.
+
+Verified 2026-09-14: `python examples/wing/run.py` produces a valid
+`wing.step`/`.stl`/`.3mf` from the mission doc's own geometry example
+values. 67/67 tests passing (bracket + wing + backend integration).
+
+Explicitly **out of scope**: any aerodynamic realism for the wing (that's
+Phase 3, Aerodynamics Agent / CFD), and the Design Agent's fuller
+"engineering project manager" responsibilities from mission doc §7
+(identify missing parameters, decompose problems, coordinate agents) —
+both parsers remain deliberately simple, rule-based, single-component-at-a-
+time.
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks | kilo |
+| Design Agent + requirement/spec schema | dune |
+
+## Next milestone: v0.3 (not yet scoped)
+
+Candidates, to be decided before assigning: (a) Design Agent as engineering
+project manager (mission doc §7 — missing-parameter detection, requirement
+decomposition) still without touching simulation; (b) begin Phase 3 (CFD)
+research spike — evaluate OpenFOAM vs. SU2 vs. XFOIL against the NACA 0012
+reference case per mission doc Phase 3, as research only, no autonomous
+optimization until validated. (b) is a materially bigger, slower-moving
+piece of work than anything done so far and should be scoped deliberately
+before starting.

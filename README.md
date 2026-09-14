@@ -24,16 +24,17 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). The active milestone is the
-**CAD MVP loop**:
+time (see `docs/architecture/roadmap.md`). Working today (v0.2):
 
 ```text
 Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / STL
 ```
 
-CFD, FEA, manufacturing analysis, and optimization are real, unimplemented
-future phases — not stubbed out as if they worked. Do not assume they exist
-yet just because the mission doc describes them.
+for two components: a mounting **bracket** and a flat-plate **wing**
+planform (see `examples/`). CFD, FEA, manufacturing analysis, optimization,
+and any aerodynamic realism for the wing are real, unimplemented future
+phases — not stubbed out as if they worked. Do not assume they exist yet
+just because the mission doc describes them.
 
 ## Repository layout
 
@@ -59,6 +60,7 @@ pip install -r backend/requirements.txt
 pytest
 
 python examples/bracket/run.py
+python examples/wing/run.py
 ```
 
 ## Contributing
