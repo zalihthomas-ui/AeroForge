@@ -1,4 +1,4 @@
-"""Unit tests for the Design Agent wing parser (v0.2/v0.3 milestones)."""
+"""Unit tests for the Design Agent wing parser (v0.2/v0.3/v0.5 milestones)."""
 
 import pytest
 from agents.design import (
@@ -30,6 +30,7 @@ def test_parse_mission_doc_wing_example(agent: DesignAgent):
         "tip_chord": 140.0,
         "sweep": 12.0,
         "dihedral": 4.0,
+        "naca_airfoil": 12.0,
     }
 
     # Verify requirements
@@ -44,6 +45,7 @@ def test_parse_mission_doc_wing_example(agent: DesignAgent):
     assert req_map["sweep"].unit == "deg"
     assert req_map["dihedral"].value == 4.0
     assert req_map["dihedral"].unit == "deg"
+    assert req_map["naca_airfoil"].value == 12.0
 
     # Verify constraints
     const_map = {c.name: c for c in spec.constraints}
@@ -57,9 +59,37 @@ def test_parse_mission_doc_wing_example(agent: DesignAgent):
     assert const_map["sweep"].operator == "=="
     assert const_map["dihedral"].value == 4.0
     assert const_map["dihedral"].operator == "=="
+    assert const_map["naca_airfoil"].value == 12.0
+    assert const_map["naca_airfoil"].operator == "=="
 
     # Metadata
     assert spec.metadata.get("raw_requirement") == text
+
+
+def test_parse_wing_with_explicit_naca_airfoil(agent: DesignAgent):
+    """Test parsing explicit NACA airfoil designations."""
+    text1 = (
+        "Create a wing with span 1800 mm, root chord 240 mm, tip chord 140 mm, "
+        "sweep 12 degrees, dihedral 4 degrees, NACA 2412 airfoil."
+    )
+    spec1 = agent.parse(text1)
+    assert spec1.component == "wing"
+    assert spec1.parameters["naca_airfoil"] == 2412.0
+
+    text2 = (
+        "UAV wing: span=1500, root_chord=200, tip_chord=100, "
+        "sweep=5, dihedral=2, airfoil: 4412"
+    )
+    spec2 = agent.parse(text2)
+    assert spec2.component == "wing"
+    assert spec2.parameters["naca_airfoil"] == 4412.0
+
+
+def test_parse_wing_default_naca_airfoil(agent: DesignAgent):
+    """Omitting airfoil in wing requirement text must default to 12.0 (NACA 0012)."""
+    text = "Wing with span 1200 mm, root chord 180 mm, tip chord 90 mm, sweep 0 degrees, dihedral 0 degrees"
+    spec = agent.parse(text)
+    assert spec.parameters["naca_airfoil"] == 12.0
 
 
 def test_parse_wing_syntax_variations(agent: DesignAgent):
@@ -72,6 +102,7 @@ def test_parse_wing_syntax_variations(agent: DesignAgent):
     assert spec1.parameters["tip_chord"] == 150.0
     assert spec1.parameters["sweep"] == 5.0
     assert spec1.parameters["dihedral"] == 2.0
+    assert spec1.parameters["naca_airfoil"] == 12.0
 
     text2 = "Aerodynamic wing with wingspan: 1500 mm, root: 200 mm, tip: 100 mm, leading edge sweep: 10 deg, dihedral angle: 3 deg"
     spec2 = agent.parse(text2)
@@ -81,6 +112,7 @@ def test_parse_wing_syntax_variations(agent: DesignAgent):
     assert spec2.parameters["tip_chord"] == 100.0
     assert spec2.parameters["sweep"] == 10.0
     assert spec2.parameters["dihedral"] == 3.0
+    assert spec2.parameters["naca_airfoil"] == 12.0
 
 
 def test_parse_wing_zero_and_negative_angles(agent: DesignAgent):
