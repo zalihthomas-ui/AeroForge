@@ -1,7 +1,11 @@
-"""Unit tests for the Design Agent wing parser (v0.2 milestone)."""
+"""Unit tests for the Design Agent wing parser (v0.2/v0.3 milestones)."""
 
 import pytest
-from agents.design import DesignAgent, UnrecognizedRequirementError
+from agents.design import (
+    DesignAgent,
+    IncompleteRequirementError,
+    UnrecognizedRequirementError,
+)
 from engineering.requirements.schema import EngineeringSpec
 
 
@@ -93,18 +97,41 @@ def test_parse_wing_zero_and_negative_angles(agent: DesignAgent):
 
 
 def test_reject_incomplete_wing_parameters(agent: DesignAgent):
-    """Missing any of the 5 parameters must raise UnrecognizedRequirementError."""
-    with pytest.raises(UnrecognizedRequirementError) as exc:
+    """Missing any parameter must raise IncompleteRequirementError with structured attributes."""
+    with pytest.raises(IncompleteRequirementError) as exc:
         agent.parse("Create a wing with span 1800 mm, root chord 240 mm, tip chord 140 mm, dihedral 4 degrees.")
-    assert "sweep" in str(exc.value)
+    assert exc.value.component == "wing"
+    assert exc.value.missing == ["sweep"]
+    assert exc.value.provided == {
+        "wing_span": 1800.0,
+        "root_chord": 240.0,
+        "tip_chord": 140.0,
+        "dihedral": 4.0,
+    }
+    assert isinstance(exc.value, UnrecognizedRequirementError)
 
-    with pytest.raises(UnrecognizedRequirementError) as exc:
+    with pytest.raises(IncompleteRequirementError) as exc:
         agent.parse("Create a wing with root chord 240 mm, tip chord 140 mm, sweep 12 deg, dihedral 4 deg.")
-    assert "span" in str(exc.value)
+    assert exc.value.component == "wing"
+    assert exc.value.missing == ["wing_span"]
+    assert exc.value.provided == {
+        "root_chord": 240.0,
+        "tip_chord": 140.0,
+        "sweep": 12.0,
+        "dihedral": 4.0,
+    }
 
-    with pytest.raises(UnrecognizedRequirementError) as exc:
-        agent.parse("Create a wing with span 1800 mm, root chord 240 mm, sweep 12 deg, dihedral 4 deg.")
-    assert "tip_chord" in str(exc.value)
+    with pytest.raises(IncompleteRequirementError) as exc:
+        agent.parse("Create a wing with span 1800 mm")
+    assert exc.value.component == "wing"
+    assert exc.value.missing == ["root_chord", "tip_chord", "sweep", "dihedral"]
+    assert exc.value.provided == {"wing_span": 1800.0}
+
+    with pytest.raises(IncompleteRequirementError) as exc:
+        agent.parse("Create an aircraft wing")
+    assert exc.value.component == "wing"
+    assert exc.value.missing == ["wing_span", "root_chord", "tip_chord", "sweep", "dihedral"]
+    assert exc.value.provided == {}
 
 
 def test_reject_non_positive_wing_dimensions(agent: DesignAgent):

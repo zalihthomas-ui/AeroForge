@@ -1,5 +1,13 @@
 """AeroForge Design Agent package."""
 
-from agents.design.agent import DesignAgent, UnrecognizedRequirementError
+from agents.design.agent import (
+    DesignAgent,
+    IncompleteRequirementError,
+    UnrecognizedRequirementError,
+)
 
-__all__ = ["DesignAgent", "UnrecognizedRequirementError"]
+__all__ = [
+    "DesignAgent",
+    "IncompleteRequirementError",
+    "UnrecognizedRequirementError",
+]

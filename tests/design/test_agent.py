@@ -1,7 +1,11 @@
-"""Unit tests for the Design Agent."""
+"""Unit tests for the Design Agent bracket parser."""
 
 import pytest
-from agents.design import DesignAgent, UnrecognizedRequirementError
+from agents.design import (
+    DesignAgent,
+    IncompleteRequirementError,
+    UnrecognizedRequirementError,
+)
 from engineering.requirements.schema import EngineeringSpec
 
 
@@ -128,10 +132,7 @@ def test_reject_empty_input(agent: DesignAgent):
 
 
 def test_reject_unsupported_component(agent: DesignAgent):
-    """Unsupported components (like wing / drone) must raise UnrecognizedRequirementError."""
-    with pytest.raises(UnrecognizedRequirementError):
-        agent.parse("Design a high-altitude UAV wing with span 2.5m")
-
+    """Unsupported components (like rocket nozzle) must raise UnrecognizedRequirementError."""
     with pytest.raises(UnrecognizedRequirementError):
         agent.parse("Build a rocket combustion chamber with throat radius 20mm")
 
@@ -143,11 +144,26 @@ def test_reject_non_engineering_text(agent: DesignAgent):
 
 
 def test_reject_incomplete_dimensions(agent: DesignAgent):
-    """Missing thickness or dimensions must raise UnrecognizedRequirementError."""
-    with pytest.raises(UnrecognizedRequirementError):
+    """Missing thickness or dimensions must raise IncompleteRequirementError with structured details."""
+    with pytest.raises(IncompleteRequirementError) as exc:
         agent.parse("Create a mounting bracket")
-    with pytest.raises(UnrecognizedRequirementError):
+    assert exc.value.component == "bracket"
+    assert exc.value.missing == ["length", "width", "thickness"]
+    assert exc.value.provided == {}
+    # Also verify it is an instance of UnrecognizedRequirementError for backwards compatibility
+    assert isinstance(exc.value, UnrecognizedRequirementError)
+
+    with pytest.raises(IncompleteRequirementError) as exc:
         agent.parse("Create a 100 x 80 mm mounting bracket")
+    assert exc.value.component == "bracket"
+    assert exc.value.missing == ["thickness"]
+    assert exc.value.provided == {"length": 100.0, "width": 80.0}
+
+    with pytest.raises(IncompleteRequirementError) as exc:
+        agent.parse("Mounting bracket with length: 120, thickness: 5")
+    assert exc.value.component == "bracket"
+    assert exc.value.missing == ["width"]
+    assert exc.value.provided == {"length": 120.0, "thickness": 5.0}
 
 
 def test_reject_invalid_dimensions(agent: DesignAgent):
