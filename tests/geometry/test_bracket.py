@@ -104,6 +104,6 @@ def test_non_integer_hole_count_is_rejected() -> None:
 
 
 def test_unsupported_component_is_rejected() -> None:
-    spec = EngineeringSpec(component="wing", parameters={})
+    spec = EngineeringSpec(component="fuselage", parameters={})
     with pytest.raises(GeometryValidationError):
         GeometryAgent().generate(spec)

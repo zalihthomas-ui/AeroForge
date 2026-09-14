@@ -12,6 +12,7 @@ from agents.geometry.validation import (
     validate_bracket_parameters,
     validate_expected_volume,
     validate_solid,
+    validate_wing_parameters,
 )
 
 
@@ -27,6 +28,20 @@ def test_validate_bracket_parameters_rejects_hole_too_wide_for_plate() -> None:
 def test_validate_bracket_parameters_rejects_holes_that_would_overlap() -> None:
     with pytest.raises(GeometryValidationError, match="overlap"):
         validate_bracket_parameters(100.0, 80.0, 5.0, 8.0, 20)
+
+
+def test_validate_wing_parameters_accepts_reference_case() -> None:
+    validate_wing_parameters(1800.0, 240.0, 140.0, 12.0, 4.0)
+
+
+def test_validate_wing_parameters_rejects_non_positive_root_chord() -> None:
+    with pytest.raises(GeometryValidationError, match="root_chord"):
+        validate_wing_parameters(1800.0, 0.0, 140.0, 12.0, 4.0)
+
+
+def test_validate_wing_parameters_rejects_sweep_near_90_degrees() -> None:
+    with pytest.raises(GeometryValidationError, match="sweep"):
+        validate_wing_parameters(1800.0, 240.0, 140.0, 89.9, 4.0)
 
 
 def test_validate_solid_accepts_a_valid_box() -> None:
