@@ -120,13 +120,68 @@ with, neither of which exist yet.
 
 68/68 tests passing.
 
-## Next milestone: v0.4 (not yet scoped)
+## Milestone: v0.4 — Aerodynamics Agent research spike (DONE, surrogate)
 
-Candidates, to be decided before assigning: further Design Agent PM
-depth (needs a second interacting agent to "coordinate" with — not much
-more to add solo), a third geometry component, or beginning Phase 3 (CFD)
-as a research spike — evaluate OpenFOAM vs. SU2 vs. XFOIL against the NACA
-0012 reference case per mission doc Phase 3, research only, no autonomous
-optimization until validated. The CFD option is a materially bigger,
-slower-moving piece of work than anything done so far and should be scoped
-deliberately before starting.
+Mission doc Phase 3: "begin with a well-understood benchmark: NACA 0012 →
+CL/CD, validated against published/reference data."
+
+**Solver decision record:** the mission doc lists OpenFOAM, SU2, XFOIL as
+candidates. We evaluated XFOIL first (lightest-weight, matches the 2D
+NACA 0012 benchmark exactly):
+
+1. `pip install xfoil` (compiled-from-source Fortran module, DARcorporation/
+   xfoil-python) fails to build on this machine — CMake configure step
+   errors under the MinGW Makefiles generator, even with `gfortran`
+   already present via MinGW64. Root cause not chased further (native
+   build-toolchain debugging, unbounded time cost).
+2. WSL is not installed (`wsl --install` needs a reboot/admin — not done
+   without an explicit ask).
+3. A prebuilt third-party XFOIL `.exe` (e.g. from a GitHub repo's bundled
+   binary) was considered and rejected for now — running unverified
+   third-party native code is a materially different trust decision than
+   installing from PyPI.
+
+**Chosen instead: NeuralFoil** (`agents/aerodynamics/agent.py`) — a
+pip-installable, no-compiler-needed neural-network aerodynamic surrogate,
+published and validated against XFOIL/experimental data. This is
+explicitly **not** XFOIL/OpenFOAM/SU2 — every file that uses it says so.
+Real first-principles solver integration remains future work, to be
+revisited once the toolchain/WSL question is deliberately resolved.
+
+Scope:
+
+- `agents/aerodynamics/agent.py` — `AerodynamicsAgent.evaluate_naca_airfoil
+  (designation, alpha_deg, reynolds) -> AeroResult(cl, cd, cm, l_over_d,
+  confidence)`, wrapping `aerosandbox.Airfoil` + `neuralfoil.get_aero_from_airfoil`.
+- Validated against **physically-grounded invariants**, not memorized
+  reference numbers we couldn't independently verify: NACA 0012 (symmetric)
+  gives ~zero CL/CM at alpha=0; CL increases monotonically over a small
+  positive alpha sweep; CD is always positive; a cambered airfoil (e.g.
+  NACA 2412) gives positive lift at alpha=0.
+- `examples/airfoil/run.py` — NACA 0012 alpha sweep (0–10°, Re=1e6).
+  Verified 2026-09-14: CL≈0 at alpha=0, monotonic lift increase, L/D peaks
+  around alpha=8° (~76) then falls off toward alpha=10° — textbook-shaped
+  polar, consistent with the surrogate being physically sound.
+
+Explicitly **out of scope**: wiring this into the CAD loop (the wing
+geometry has no airfoil section yet — flat-plate approximation, see v0.2),
+and any first-principles solver. 76/76 tests passing.
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks | kilo |
+| Design Agent + Aerodynamics Agent | dune |
+
+## Next milestone: v0.5 (not yet scoped)
+
+Candidates: give the wing geometry a real airfoil cross-section (instead
+of the flat-plate approximation) so the Aerodynamics Agent's NACA
+evaluation can eventually attach to actual wing CAD; resolve the
+XFOIL/WSL toolchain question deliberately as its own scoped task; or begin
+Phase 4 (Structures/FEA) research the same way Phase 3 was approached here
+— evaluate solver options, document constraints honestly, choose a
+pragmatic validated path rather than forcing the exact tool list if it
+doesn't fit this environment.
