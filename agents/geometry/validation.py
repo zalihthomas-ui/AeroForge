@@ -28,6 +28,10 @@ MIN_HOLE_SPACING_MM = 2.0
 # expected volume before it's treated as a self-intersection.
 VOLUME_TOLERANCE_RATIO = 1e-3
 
+# Sweep/dihedral must stay strictly inside +/-90 degrees: at 90 degrees
+# tan() diverges and the loft geometry becomes degenerate.
+MAX_SWEEP_DIHEDRAL_DEG = 89.0
+
 
 class GeometryValidationError(Exception):
     """Raised when a spec's parameters or the geometry built from them are invalid."""
@@ -84,6 +88,29 @@ def validate_bracket_parameters(
             f"along a length of {length} mm without overlapping: each hole needs "
             f"at least {min_segment} mm of the {segment:.3f} mm available per hole."
         )
+
+
+def validate_wing_parameters(
+    wing_span: float,
+    root_chord: float,
+    tip_chord: float,
+    sweep_deg: float,
+    dihedral_deg: float,
+) -> None:
+    """Reject wing parameters that can't produce valid geometry.
+
+    Runs before any OCCT calls so bad input fails fast with a clear reason.
+    """
+    _require_positive("wing_span", wing_span)
+    _require_positive("root_chord", root_chord)
+    _require_positive("tip_chord", tip_chord)
+
+    for name, angle in (("sweep", sweep_deg), ("dihedral", dihedral_deg)):
+        if abs(angle) >= MAX_SWEEP_DIHEDRAL_DEG:
+            raise GeometryValidationError(
+                f"'{name}' must be strictly within "
+                f"(-{MAX_SWEEP_DIHEDRAL_DEG}, {MAX_SWEEP_DIHEDRAL_DEG}) degrees, got {angle}."
+            )
 
 
 def validate_solid(part: Part, *, context: str) -> None:

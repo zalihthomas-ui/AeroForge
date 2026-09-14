@@ -2,7 +2,8 @@
 
 Consumes the shared EngineeringSpec contract produced by the Design Agent
 (see engineering/requirements/schema.py) and produces validated parametric
-geometry. Out of scope for v0.1: any component other than "bracket".
+geometry. Supported components: "bracket", "wing" (a flat-plate planform
+approximation, see agents/geometry/wing.py).
 """
 
 from __future__ import annotations
@@ -15,9 +16,11 @@ from engineering.requirements.schema import EngineeringSpec
 
 from .bracket import build_bracket
 from .validation import GeometryValidationError
+from .wing import build_wing
 
 _BUILDERS: dict[str, Callable[[dict[str, float]], Part]] = {
     "bracket": build_bracket,
+    "wing": build_wing,
 }
 
 
