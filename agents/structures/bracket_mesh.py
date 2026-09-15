@@ -46,6 +46,7 @@ from dataclasses import dataclass
 
 import gmsh
 
+from agents.geometry.bracket import hole_center_x_positions
 from agents.structures.inp_utils import extract_mesh_blocks
 
 # Mesh refinement (gmsh Distance+Threshold fields) relative to hole size and
@@ -72,14 +73,6 @@ class BracketMesh:
     max_node_id: int
     fixed_node_ids: list[int]
     loaded_node_ids: list[int]
-
-
-def hole_center_x_positions(length_mm: float, hole_count: int) -> list[float]:
-    """Hole center X-positions — must mirror agents/geometry/bracket.py's
-    build_bracket() spacing exactly, since this is used to locate the
-    hole faces in the meshed geometry it produces."""
-    segment = length_mm / hole_count
-    return [-length_mm / 2 + (i + 0.5) * segment for i in range(hole_count)]
 
 
 def mesh_bracket(
