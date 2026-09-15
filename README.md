@@ -24,13 +24,14 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). Working today (v0.11), and
+time (see `docs/architecture/roadmap.md`). Working today (v0.12), and
 worth starting here: **`python examples/wing/flagship_demo.py`** runs the
 actual mission doc §20 flagship demonstration end-to-end — a UAV wing
 requirement, evaluated for real, genuinely failing a lift-adequacy check
 (65.67N produced vs. 117.72N needed for a 12kg-MTOW aircraft), then
-closed-loop resized until it passes (real CAD exported), all with real
-solvers, no fictional numbers:
+closed-loop resized until it passes (real CAD exported, ~1.16kg realistic
+shell mass reported alongside), all with real solvers, no fictional
+numbers:
 
 ```text
 Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / STL
@@ -71,7 +72,9 @@ optimized CAD" chains):
   optimization (`bracket_optimizer.py`) plus materialization for both
   wing and bracket (`bracket_materializer.py`, `wing_materializer.py`) —
   every optimizer now regenerates and re-verifies real CAD, not just
-  numbers.
+  numbers. Multi-parameter optimization (`bracket_optimizer_2d.py`) finds
+  the minimum-mass thickness *and* hole diameter together via derivative-
+  free constrained optimization (COBYLA), not just thickness alone.
 - **Manufacturing Agent** (`examples/bracket/manufacturability.py`): real
   CNC design-for-manufacturability checks — drill depth-to-diameter ratio
   and actual hole-to-edge clearance — on the actual bracket geometry,
@@ -80,11 +83,12 @@ optimized CAD" chains):
   `examples/wing/flagship_demo.py`): the actual mission doc §20
   demonstration — mission requirements (MTOW, cruise speed, span, safety
   factor) → real lift/L-D/safety-factor evaluation → PASS/FAIL →
-  closed-loop resizing until it passes → sized CAD exported. Mass is
-  reported as informational solid-CAD-volume only, not part of PASS/FAIL
-  (a solid-aluminum wing computes to ~14.7kg, heavier than the whole
-  aircraft — unrepresentative of real hollow/foam UAV construction, a
-  gap noted honestly rather than papered over).
+  closed-loop resizing until it passes → sized CAD exported. Mass is now a
+  genuinely realistic thin-shell estimate (`~1.16kg` on the sized design —
+  a real, sourced first-order approximation, not the ~14.7kg a solid-
+  aluminum wing would compute to), still informational rather than a
+  PASS/FAIL gate since no sourced full-aircraft weight budget exists to
+  check it against.
 
 The frontend dashboard is a real, unimplemented future phase — not
 stubbed out as if it worked. Do not assume it exists yet just because the
@@ -132,6 +136,7 @@ python examples/bracket/manufacturability.py
 python examples/wing/structural_analysis.py
 python examples/bracket/optimize.py    # slow: real closed-loop FEA optimization, ~10 min
 python examples/bracket/materialize.py # slow: chains optimize + materialize, ~15-17 min
+python examples/bracket/optimize_2d.py # slow: 2D COBYLA search, ~20-30 min
 python examples/wing/flagship_demo.py  # the flagship demo -- start here if you only run one
 ```
 

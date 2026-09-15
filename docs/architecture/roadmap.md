@@ -894,13 +894,113 @@ run-to-run given the flake above; every individual suite run clean).
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket/flagship analysis + optimization + CAD materialization | dune |
 
-## Next milestone: v0.12 (not yet scoped)
+## Milestone: v0.12 — realistic wing mass + multi-parameter bracket optimization (DONE)
 
-Candidates: a hollow/foam-core (or shell) wing geometry model, enabling a
-genuine mass-based PASS/FAIL criterion for the flagship demo (currently
-explicitly deferred); multi-parameter bracket optimization (thickness +
-hole placement together, needing a proper multi-dimensional method);
-extending Manufacturing Agent checks to the wing once a real wing
-manufacturing process (sheet-metal, composite layup) is chosen; or
-investigating the test_bracket_optimizer.py full-suite flake if it recurs
-with enough frequency to be worth root-causing.
+Two parallel, non-overlapping tracks, both landed 2026-09-15, then wired
+together by chief into the flagship demo (a small, deliberate follow-up
+integration, not delegated — see below).
+
+### Realistic wing mass, closing the v0.11 honesty gap
+
+v0.11 explicitly deferred a real mass estimate: a solid-aluminum wing
+computes to ~14.7kg, heavier than the entire 12kg aircraft, obviously not
+representative of real (thin-skin) UAV construction.
+
+**Chief found a genuine crash before delegating**: the obvious approach
+(hollow the solid via build123d's `offset(amount=-t,
+kind=Kind.INTERSECTION)`, a constant-wall-thickness boolean) **segfaulted**
+(exit code 139, a hard crash in the OCC kernel, not a clean exception) on
+this geometry. Kilo independently reproduced it (hung past 90s, consistent
+with the segfault) before building anything on the finding.
+
+Rather than fight the crash, used the standard first-order aircraft-
+conceptual-design thin-shell approximation instead: `mass ≈ surface_area ×
+skin_thickness × density`, needing only `Part.area` (a safe, fast
+geometric query — no boolean operation, no crash risk). Defaults sourced
+the same way the Manufacturing Agent sourced its thresholds (0.5mm typical
+thin composite skin, 1600 kg/m³ typical E-glass/epoxy laminate), both
+overridable. Reference wing: **~0.56kg** — clearly lighter than the solid-
+aluminum figure it replaces, and (documented honestly) skin mass only, not
+including spars/ribs/internal structure.
+
+**Kilo made a disciplined call on the stretch goal** (attempting real
+hollow 3D geometry via loft-based construction instead of post-hoc
+offsetting): worked out *analytically* that the root trailing edge is only
+~0.6mm thick, so any offset-based approach — solid-hollowing or profile-
+lofting — would hit the identical self-intersection failure there,
+independent of construction method. Reported this reasoning instead of
+spending implementation time re-deriving the same failure empirically.
+
+`agents/geometry/wing.py`'s `estimate_wing_shell_mass_kg()`. 7 new tests.
+
+**Chief wired this into the flagship demo** (`wing_flagship.py`) as a
+small follow-up integration: `FlagshipDesignResult` gains `shell_mass_kg`
+alongside the existing `solid_volume_mm3` (kept, now clearly labeled as a
+raw geometric fact, NOT a mass estimate, to avoid confusion). Still
+informational only, not part of `overall_status` — there's no sourced
+"max wing mass" requirement to check it against (would need a full
+aircraft weight budget, out of scope). Verified end-to-end: the flagship
+demo's sized design now reports **1.159kg** — a genuinely plausible number
+for a real UAV wing panel, landing naturally in the same order of
+magnitude as the mission doc's own fictional example range (2.47-2.91kg
+for, presumably, the whole aircraft) without ever being tuned to match it.
+
+### Multi-parameter bracket optimization (thickness + hole diameter)
+
+v0.8's `bracket_optimizer.py` optimized one variable (thickness) via
+root-finding, since the problem was a single equation, single unknown. Two
+variables (thickness, hole diameter) with one constraint (max stress)
+means a whole *curve* of constraint-satisfying points — a genuine
+constrained optimization problem, not a root-find.
+
+**A real cost-profile decision, made explicit before coding** (mirroring
+v0.8's brentq reasoning): a gradient-based constrained method (SLSQP,
+trust-constr) would need finite-difference gradients (~3 evaluations per
+2D iteration) over 10-20+ iterations — 30-60+ evaluations at ~1-1.5min
+each is a real risk. Used `scipy.optimize.minimize(method='COBYLA')`
+instead — derivative-free, handles inequality constraints natively,
+query-efficient for low-dimensional expensive problems — with an explicit
+bounded evaluation budget and a fast geometric pre-filter
+(`validate_bracket_parameters`) so COBYLA probes on invalid geometry never
+waste an expensive FEA solve.
+
+`engineering/analysis/bracket_optimizer_2d.py`. Fast/mocked tests use a
+stress surrogate *calibrated against the actual verified reference stress
+value* (5.48 MPa at t=5mm, d=8mm — matching v0.10's real measurement, not
+an arbitrary function). Real-FEA test verified (7:44, 4 evaluations) —
+surfaced a useful, honestly-reported finding: COBYLA's scipy
+implementation silently raises a too-small `max_evaluations` up to its 2D
+minimum (`num_vars+2`) with a warning, worth knowing about even though the
+optimizer still worked correctly. 16 new tests, 36/36 fast bracket-
+optimizer tests (1D+2D combined) passing.
+
+Explicitly **out of scope**: wiring the 2D optimizer's result into a
+CAD-materializer (v0.8/v0.9's bracket_materializer.py only knows the 1D
+result shape; a 2D materializer is straightforward future work, not done
+here); resolving the `test_bracket_optimizer.py` flake (kilo independently
+saw it recur a second time this round, unrelated to either track's
+changes — now flagged twice across two rounds, worth root-causing if it
+keeps happening).
+
+204/204 fast tests passing combined (full suite with all real-FEA tests
+now takes ~20+ minutes given the growing number of closed-loop
+optimization/materialization chains).
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket/flagship analysis + optimization + CAD materialization | dune |
+
+## Next milestone: v0.13 (not yet scoped)
+
+Candidates: a 2D bracket optimizer-to-CAD materializer (mirroring the 1D
+one, now that the 2D optimizer exists); extending Manufacturing Agent
+checks to the wing once a real wing manufacturing process (sheet-metal,
+composite layup) is chosen; investigating the recurring
+`test_bracket_optimizer.py` full-suite flake (seen twice now); or a full
+aircraft weight budget model, enabling a genuine mass-based PASS/FAIL
+criterion in the flagship demo (currently informational only for lack of
+a sourced requirement to check against).
