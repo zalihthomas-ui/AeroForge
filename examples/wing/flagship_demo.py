@@ -87,7 +87,8 @@ def main() -> None:
     print(f"  -> Lift Adequate:    {initial_result.lift_adequate} (Target: >= {required_lift_n:.2f} N)")
     print(f"  -> Lift-to-Drag L/D: {initial_result.l_over_d:.2f}")
     print(f"  -> Safety Factor:    {initial_result.safety_factor:.2f} (Target: >= {min_safety_factor:.2f})")
-    print(f"  -> Solid CAD Volume: {initial_result.solid_volume_mm3 * 1e-6:.4f} dm^3 (informational)")
+    print(f"  -> Shell Mass (est): {initial_result.shell_mass_kg:.3f} kg (informational -- thin-skin estimate, not part of PASS/FAIL)")
+    print(f"  -> Solid CAD Volume: {initial_result.solid_volume_mm3 * 1e-6:.4f} dm^3 (raw geometric fact, NOT a mass estimate)")
     print(f"  -> OVERALL STATUS:   [{initial_result.overall_status}]")
 
     # 3. Perform Closed-Loop Planform Sizing
@@ -113,6 +114,7 @@ def main() -> None:
     print(f"  -> Final Lift:                     {sized_result.lift_n:.2f} N (Target: {required_lift_n:.2f} N)")
     print(f"  -> Final Lift-to-Drag L/D:         {sized_result.l_over_d:.2f}")
     print(f"  -> Final Safety Factor:            {sized_result.safety_factor:.2f} (Adequate: {sized_result.safety_adequate})")
+    print(f"  -> Sized Shell Mass (est):         {sized_result.shell_mass_kg:.3f} kg (informational)")
     print(f"  -> Sized Solid CAD Volume:         {sized_result.solid_volume_mm3 * 1e-6:.4f} dm^3")
     print(f"  -> FINAL OVERALL STATUS:           [{sized_result.overall_status}]")
 
@@ -143,6 +145,7 @@ def main() -> None:
     print(f"{'Root Chord (mm)':<30} | {baseline_spec.parameters['root_chord']:<20.1f} | {final_root:<20.1f}")
     print(f"{'Tip Chord (mm)':<30} | {baseline_spec.parameters['tip_chord']:<20.1f} | {final_tip:<20.1f}")
     print(f"{'Wing Span (mm)':<30} | {baseline_spec.parameters['wing_span']:<20.1f} | {sized_result.spec_parameters['wing_span']:<20.1f}")
+    print(f"{'Shell Mass, est. (kg)':<30} | {initial_result.shell_mass_kg:<20.3f} | {sized_result.shell_mass_kg:<20.3f}")
     print(f"{'Produced Lift (N)':<30} | {initial_result.lift_n:<20.2f} | {sized_result.lift_n:<20.2f}")
     print(f"{'Required Lift (N)':<30} | {required_lift_n:<20.2f} | {required_lift_n:<20.2f}")
     print(f"{'Lift Adequate':<30} | {str(initial_result.lift_adequate):<20} | {str(sized_result.lift_adequate):<20}")

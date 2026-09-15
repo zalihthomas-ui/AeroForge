@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from scipy.optimize import brentq
 
-from agents.geometry.wing import build_wing
+from agents.geometry.wing import build_wing, estimate_wing_shell_mass_kg
 from agents.structures.agent import (
     CALCULIX_AVAILABLE,
     StructuresAgent,
@@ -53,7 +53,8 @@ class FlagshipDesignResult:
     """Multidisciplinary performance and adequacy evaluation result for a UAV wing design."""
 
     spec_parameters: dict[str, float]
-    solid_volume_mm3: float  # informational CAD solid volume
+    solid_volume_mm3: float  # raw geometric fact -- NOT a mass estimate (see shell_mass_kg)
+    shell_mass_kg: float  # informational: realistic thin-shell mass estimate (v0.12), still not part of overall_status
     lift_n: float
     required_lift_n: float  # mtow_kg * 9.81
     lift_adequate: bool
@@ -132,10 +133,17 @@ def evaluate_wing_design(
     lift_n = aero.lift_n
     l_over_d = aero.l_over_d
 
-    # 2. Informational CAD solid volume (build123d)
+    # 2. Informational geometry: raw solid volume, plus (v0.12) a realistic
+    # thin-shell mass estimate -- a solid-material mass would be wildly
+    # unrealistic (~14.7kg for the reference wing, heavier than the whole
+    # 12kg aircraft); real small UAV wings are a thin skin, not solid
+    # material. Still informational only, not part of overall_status: there
+    # is no sourced "max wing mass" requirement to check it against (that
+    # would need a full aircraft weight budget breakdown, out of scope).
     try:
         part = build_wing(spec.parameters)
         solid_volume_mm3 = float(part.volume)
+        shell_mass_kg = estimate_wing_shell_mass_kg(spec.parameters)
     except Exception as exc:
         raise WingFlagshipError(f"Geometry generation failed: {exc}") from exc
 
@@ -160,6 +168,7 @@ def evaluate_wing_design(
     return FlagshipDesignResult(
         spec_parameters=dict(spec.parameters),
         solid_volume_mm3=solid_volume_mm3,
+        shell_mass_kg=shell_mass_kg,
         lift_n=lift_n,
         required_lift_n=required_lift_n,
         lift_adequate=lift_adequate,

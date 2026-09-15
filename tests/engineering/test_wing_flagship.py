@@ -91,6 +91,8 @@ def test_baseline_wing_fails_lift_requirement(
     assert res.span_adequate is True
     assert res.overall_status == "FAIL"
     assert res.solid_volume_mm3 > 0  # informational CAD solid volume reported
+    assert 0 < res.shell_mass_kg < 12.0  # realistic thin-shell estimate, well under MTOW
+    assert res.shell_mass_kg < res.solid_volume_mm3 * 2700e-9  # lighter than solid aluminum would be
 
 
 def test_find_passing_wing_design_converges(
