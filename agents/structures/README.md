@@ -33,22 +33,28 @@ drive real XFOIL:
   `agents/structures/bracket_mesh.py`, `agents/structures/frd_utils.py`,
   and `examples/bracket/structural_analysis.py`.
 - `evaluate_wing(wing_spec, cruise_velocity_mps=25.0, alpha_deg=4.0, ...)`
-  (v0.10): real 3D solid FEA on the **actual** `agents/geometry/wing.py`
-  component (real NACA airfoil cross-sections, not a flat-plate
-  approximation), loaded by its own computed aerodynamic lift via
+  (v0.10, load distribution made realistic in v0.11): real 3D solid FEA
+  on the **actual** `agents/geometry/wing.py` component (real NACA
+  airfoil cross-sections, not a flat-plate approximation), loaded by its
+  own computed aerodynamic lift via
   `engineering.analysis.wing_aero.evaluate_wing_aero` — the first time an
   aerodynamic result drives a structural load in this project rather than
-  a hand-picked force. A genuine symmetry-plane BC (`UY=0` at the root
-  only) rather than full fixity, since the wing is physically continuous
-  through its centerline under symmetric loading. Validated the same way
-  as the bracket (exact force equilibrium + mesh convergence + hot-spot
-  stress for the same fixed-edge singularity). Reference case: 1800mm
-  span, NACA 0012, 65.7N real lift at 25m/s cruise → safety factor ~290
-  (correctly large for a lightly loaded 1g cruise condition, not a red
-  flag). See `agents/structures/wing_mesh.py` for two genuinely non-
-  obvious meshing findings (real-airfoil trailing-edge sliver elements;
-  no face exists at the wing's root after `build_wing`'s mirror/fuse
-  operation) and `examples/wing/structural_analysis.py`.
+  a hand-picked force. Lift is distributed spanwise per the classical
+  **elliptical (Prandtl) distribution**, not uniformly (v0.10's
+  documented simplification) — concentrating more force near the root,
+  which *reduced* peak stress/deflection versus uniform loading rather
+  than increasing it (a shorter average moment arm to the fixed root, a
+  counterintuitive but verified finding). A genuine symmetry-plane BC
+  (`UY=0` at the root only) rather than full fixity, since the wing is
+  physically continuous through its centerline under symmetric loading.
+  Validated the same way as the bracket (exact force equilibrium + mesh
+  convergence + hot-spot stress for the same fixed-edge singularity).
+  Reference case: 1800mm span, NACA 0012, 65.7N real lift at 25m/s cruise
+  → safety factor ~350 (correctly large for a lightly loaded 1g cruise
+  condition, not a red flag). See `agents/structures/wing_mesh.py` for
+  two genuinely non-obvious meshing findings (real-airfoil trailing-edge
+  sliver elements; no face exists at the wing's root after `build_wing`'s
+  mirror/fuse operation) and `examples/wing/structural_analysis.py`.
 
 Requires CalculiX installed separately (`scripts/install_calculix_windows.sh`)
 since `ccx.exe` depends on a large stack of MSYS2 runtime DLLs that can't

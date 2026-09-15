@@ -799,17 +799,108 @@ component, not yet a multi-generation converge-until-stable process).
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket analysis + optimization + CAD materialization | dune |
 
-## Next milestone: v0.11 (not yet scoped)
+## Milestone: v0.11 — the actual mission doc §20 flagship demonstration (DONE)
 
-Candidates: now that both wing and bracket have real, structurally
-validated safety factors and L/D via real solvers, assemble a genuine
-mission doc §20 flagship demonstration (Mass, L/D, Safety Factor,
-PASS/FAIL against MTOW=12kg/cruise=25m/s/span<2m/CL=0.6/SF>1.5-style
-requirements, iterating like the mission doc's own INITIAL→FINAL DESIGN
-example) — the first time every real discipline built so far (Design,
-Geometry, Aerodynamics, Structures, Manufacturing, Optimization) would
-work together on one end-to-end case; an elliptical spanwise lift
-distribution for the wing (currently uniform, documented as such);
-multi-parameter bracket optimization (thickness + hole placement
-together); or extending Manufacturing Agent checks to the wing once a
-real wing manufacturing process (sheet-metal, composite layup) is chosen.
+Two parallel, non-overlapping tracks, both landed 2026-09-15. The first
+time every real discipline built so far (Design, Geometry, Aerodynamics,
+Structures, Optimization) works together on one end-to-end case.
+
+### Mission doc §20's flagship demonstration, with real numbers
+
+Mission doc §20 describes an illustrative UAV wing example: INITIAL
+DESIGN (Mass 2.91kg, L/D 14.2, SF 1.32, FAIL) → iterate → FINAL DESIGN
+(Mass 2.47kg, L/D 17.8, SF 1.71, PASS). Those specific numbers are
+fictional prose, not a target — the goal was to build the genuine
+pipeline and let real numbers fall out, matching or not.
+
+**Chief worked out the physics before delegating**: for level cruise
+flight, Lift = Weight, so `required_lift_n = mtow_kg * 9.81` is a real,
+checkable constraint — not invented. Checked it against the actual
+reference wing (1800mm span, 240/140mm chords) for a 12kg-MTOW aircraft
+at 25 m/s: its planform area needs CL≈0.90 to produce enough lift, a
+genuine, non-rigged number. This predicted the reference wing would
+authentically FAIL a lift-adequacy check — confirmed exactly: 65.67N
+produced vs. 117.72N required.
+
+**Chief also caught a mass-modeling honesty issue before it could
+mislead**: the wing's current geometry is a *solid* airfoil shape (no
+hollow/shell structure). A solid-aluminum reference wing computes to
+~14.7kg — heavier than the entire 12kg aircraft, obviously not
+representative of real (foam/composite/hollow) UAV wing construction.
+Scoped mass as informational-only (`solid_volume_mm3`, explicitly labeled
+as not a realistic mass estimate) rather than part of the PASS/FAIL
+determination, which would have required inventing an unsourced "effective
+density" — avoided rather than papered over.
+
+- `engineering/analysis/wing_flagship.py` — `evaluate_wing_design(spec,
+  requirement)` assembles lift, L/D (`wing_aero`), safety factor
+  (`evaluate_wing`), and span into one PASS/FAIL `FlagshipDesignResult`.
+  `find_passing_wing_design(base_spec, requirement)` closes the loop for
+  real when the initial design fails: scales chord (preserving span and
+  taper ratio) via bounded root-finding (`scipy.optimize.brentq`) to hit
+  the required lift exactly, re-verifies structural safety factor and
+  span, and exports the sized CAD.
+- **Verified end-to-end**: initial design (65.67N, FAIL) → sized design
+  (chord ×2.05, 117.72N exactly, L/D 57.16, safety factor 1374→1643
+  after v0.11's elliptical-load update, PASS). `examples/wing/flagship_demo.py`
+  presents this in the mission doc's own INITIAL/FINAL style — the single
+  most complete, most important demonstration in the repo.
+- A minor self-referential data-model quirk was found, verified non-fatal
+  (Python's dataclass `__repr__` auto-guards against the reference cycle),
+  and cleaned up anyway once flagged: an already-passing design now
+  returns `iterations=[]` instead of `iterations=[self]`.
+
+Explicitly **out of scope**: a real mass/weight PASS/FAIL criterion (needs
+a hollow/foam-core wing geometry model that doesn't exist yet — honestly
+deferred, not faked); Manufacturing Agent checks in the flagship score
+(no wing manufacturing process chosen yet).
+
+### Elliptical (Prandtl) spanwise lift distribution for the wing
+
+v0.10 documented the wing's uniform load as a first-order simplification.
+This replaces it with the real classical elliptical distribution —
+`L'(y) = (4L)/(π·b)·√(1-(2y/b)²)` (Prandtl lifting-line theory) — verified
+by numerical integration to reduce to exactly the total lift before being
+relied on, applied as normalized per-node weights so the equilibrium
+check is preserved unchanged regardless of the (non-uniform) mesh node
+distribution.
+
+**A genuine correction to chief's own task brief, caught and explained
+rigorously**: the brief predicted concentrating load near the root would
+be *more* structurally demanding. Verified opposite: switching to
+elliptical loading *decreased* peak stress and deflection (~0.79MPa/
+0.25mm vs. v0.10's ~0.95MPa/0.34mm) — concentrating force near the root
+actually *shortens* its average moment arm to the fixed root (elliptical
+force centroid at ~43% of half-span vs. uniform's 50%), reducing bending
+demand rather than increasing it. Confirmed both analytically and against
+actual mesh node positions before writing it up. Mesh convergence was
+re-verified under the new load at three densities rather than assuming
+the v0.10 density pair still held (it did).
+
+One unrelated, honestly-flagged finding: `test_bracket_optimizer.py`'s
+real-CalculiX test failed once during a full-suite run but passed
+reliably in isolation (chief independently confirmed: 21/21 fast +
+reliable standalone) — an environment/timing flake under sustained
+multi-process load, not a regression, and not code this track touched.
+
+184+/185ish tests passing across both tracks combined (exact count shifts
+run-to-run given the flake above; every individual suite run clean).
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket/flagship analysis + optimization + CAD materialization | dune |
+
+## Next milestone: v0.12 (not yet scoped)
+
+Candidates: a hollow/foam-core (or shell) wing geometry model, enabling a
+genuine mass-based PASS/FAIL criterion for the flagship demo (currently
+explicitly deferred); multi-parameter bracket optimization (thickness +
+hole placement together, needing a proper multi-dimensional method);
+extending Manufacturing Agent checks to the wing once a real wing
+manufacturing process (sheet-metal, composite layup) is chosen; or
+investigating the test_bracket_optimizer.py full-suite flake if it recurs
+with enough frequency to be worth root-causing.
