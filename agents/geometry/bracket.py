@@ -26,6 +26,18 @@ DEFAULT_PARAMETERS: dict[str, float] = {
 _HOLE_HEIGHT_MARGIN_RATIO = 0.2
 
 
+def hole_center_x_positions(length_mm: float, hole_count: int) -> list[float]:
+    """X-position of each hole's center, evenly spaced and centered along
+    the bracket's length. The single source of truth for this spacing —
+    reused by agents/structures/bracket_mesh.py (to locate the holes in
+    the meshed geometry) and agents/manufacturing/agent.py (to compute
+    real edge-clearance distances), so it only needs to change in one
+    place if the spacing scheme ever does.
+    """
+    segment = length_mm / hole_count
+    return [-length_mm / 2 + (i + 0.5) * segment for i in range(hole_count)]
+
+
 def build_bracket(parameters: dict[str, float]) -> Part:
     """Build a rectangular mounting bracket Part from `parameters`.
 
@@ -49,9 +61,7 @@ def build_bracket(parameters: dict[str, float]) -> Part:
     if hole_count > 0:
         hole_radius = hole_diameter / 2
         hole_height = thickness * (1 + _HOLE_HEIGHT_MARGIN_RATIO)
-        segment = length / hole_count
-        for i in range(hole_count):
-            x = -length / 2 + (i + 0.5) * segment
+        for x in hole_center_x_positions(length, hole_count):
             plate -= Pos(x, 0, 0) * Cylinder(hole_radius, hole_height)
         hole_volume = math.pi * hole_radius**2 * thickness
 
