@@ -96,7 +96,7 @@ def main() -> None:
     print("CONSISTENCY RE-ANALYSIS VERIFICATION")
     print("=" * 80)
     print(f"Optimal NACA Airfoil:       NACA {opt_result.optimal_naca_airfoil}")
-    print(f"Optimal Alpha (deg):        {opt_result.optimal_alpha_deg:.2f}°")
+    print(f"Optimal Alpha (deg):        {opt_result.optimal_alpha_deg:.2f}")
     print(f"Optimizer Reported Max L/D: {opt_result.max_l_over_d:.4f}")
     print(f"CAD Spec Re-analysis L/D:   {mat_result.reanalysis.l_over_d:.4f}")
     print(f"L/D Discrepancy:            {mat_result.l_over_d_discrepancy_pct:.4f}%")
