@@ -1,9 +1,20 @@
-"""Structures Agent: cantilever beam FEA via real CalculiX (ccx.exe).
+"""Structures Agent: real FEA via CalculiX (ccx.exe), two ways.
 
-Not a surrogate — this drives the genuine CalculiX FEA solver (B31
-Timoshenko beam elements) via subprocess, the same way agents/aerodynamics
-drives real XFOIL. See vendor/calculix/README.md for the full install and
-validation story.
+Not a surrogate — this drives the genuine CalculiX FEA solver via
+subprocess, the same way agents/aerodynamics drives real XFOIL:
+
+- `evaluate_cantilever_beam`: 1D B31 Timoshenko beam elements on a
+  parametric beam, validated against closed-form Euler-Bernoulli theory
+  (~0.3% error on the reference case — see vendor/calculix/README.md).
+- `evaluate_plate_with_hole`: real 3D solid FEA on actual meshed CAD
+  geometry (gmsh C3D10 quadratic tets on a build123d plate-with-hole,
+  see agents/structures/plate_with_hole.py), validated against Kirsch's
+  classical stress-concentration solution (Kt=3.0 for a small hole in a
+  wide plate under tension). Observed error on the reference case
+  (200x200x5mm plate, 10mm hole): ~0.4%; across hole diameters from 3% to
+  8% of plate width: within ~2%. This is the first link in the repo
+  between real Geometry Agent-style CAD (our bracket geometry IS a plate
+  with holes) and real solid simulation, not just parametric primitives.
 
 Critical gotcha (see vendor/calculix/README.md): this MSYS2 build of
 CalculiX (2.23) hangs indefinitely on this machine when its default sparse
@@ -26,9 +37,28 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
+from agents.structures.plate_with_hole import PlateMesh, build_plate_with_hole, mesh_plate_with_hole
+from cad.exporters import export_step
+
 _DEFAULT_CCX_PATH = r"C:\msys64\mingw64\bin\ccx.exe"
-_CCX_TIMEOUT_S = 30
-_JOBNAME = "beam"
+_BEAM_CCX_TIMEOUT_S = 30
+_BEAM_JOBNAME = "beam"
+
+# 3D solid meshes solve much slower than the 1D beam case (a few tens of
+# seconds observed for a few thousand C3D10 elements) — generous margin for
+# slower machines, while still bounding a hang.
+_PLATE_CCX_TIMEOUT_S = 180
+_PLATE_JOBNAME = "plate"
+
+# Kirsch (1898): stress concentration factor at the edge of a small circular
+# hole in a wide plate under uniaxial tension, in the infinite-plate limit.
+_KIRSCH_KT = 3.0
+
+# Kirsch's Kt=3.0 only holds as the hole becomes small relative to plate
+# width; beyond this ratio it needs a finite-width correction this agent
+# doesn't implement, so it's rejected rather than silently validated against
+# the wrong target.
+_MAX_HOLE_TO_WIDTH_RATIO = 0.1
 
 
 class StructuresEvaluationError(Exception):
@@ -45,6 +75,18 @@ class StructuralResult:
     max_bending_stress_mpa: float
     analytical_deflection_mm: float
     deflection_error_pct: float
+
+
+@dataclass
+class PlateWithHoleResult:
+    """Result of a plate-with-hole FEA evaluation, vs. Kirsch's closed-form
+    stress concentration solution."""
+
+    max_stress_mpa: float
+    nominal_stress_mpa: float
+    stress_concentration_factor: float
+    theoretical_kt: float
+    error_pct: float
 
 
 def _find_ccx_path() -> str | None:
@@ -106,8 +148,8 @@ class StructuresAgent:
                 "scripts/install_calculix_windows.sh — see vendor/calculix/README.md."
             )
 
-        with tempfile.TemporaryDirectory(prefix="aeroforge_ccx_") as work_dir:
-            inp_path = os.path.join(work_dir, f"{_JOBNAME}.inp")
+        with tempfile.TemporaryDirectory(prefix="aeroforge_ccx_beam_") as work_dir:
+            inp_path = os.path.join(work_dir, f"{_BEAM_JOBNAME}.inp")
             with open(inp_path, "w", encoding="ascii") as f:
                 f.write(
                     self._build_input_deck(
@@ -115,20 +157,13 @@ class StructuresAgent:
                     )
                 )
 
-            self._run_ccx(ccx_path, work_dir)
+            self._run_ccx(ccx_path, work_dir, jobname=_BEAM_JOBNAME, timeout=_BEAM_CCX_TIMEOUT_S)
 
-            dat_path = os.path.join(work_dir, f"{_JOBNAME}.dat")
-            if not os.path.isfile(dat_path):
-                raise StructuresEvaluationError(
-                    f"ccx.exe finished but produced no {_JOBNAME}.dat output file — "
-                    "the solve likely failed. Check the generated .inp for errors."
-                )
-
-            with open(dat_path, encoding="latin-1") as f:
-                dat_text = f.read()
+            dat_text = self._read_dat_file(work_dir, _BEAM_JOBNAME)
 
         tip_node = num_elements + 1
-        tip_vy_mm, max_abs_sxx_mpa = self._parse_dat_file(dat_text, tip_node)
+        tip_vy_mm = self._parse_node_displacement(dat_text, tip_node, jobname=_BEAM_JOBNAME)
+        max_abs_sxx_mpa = self._parse_max_abs_sxx(dat_text, jobname=_BEAM_JOBNAME)
         tip_deflection_mm = abs(tip_vy_mm)
 
         moment_of_inertia_mm4 = width_mm * height_mm**3 / 12
@@ -140,6 +175,181 @@ class StructuresAgent:
             max_bending_stress_mpa=max_abs_sxx_mpa,
             analytical_deflection_mm=analytical_deflection_mm,
             deflection_error_pct=deflection_error_pct,
+        )
+
+    def evaluate_plate_with_hole(
+        self,
+        width_mm: float,
+        height_mm: float,
+        thickness_mm: float,
+        hole_diameter_mm: float,
+        tensile_stress_mpa: float,
+        youngs_modulus_mpa: float = 210000.0,
+        poissons_ratio: float = 0.3,
+    ) -> PlateWithHoleResult:
+        """Evaluate a rectangular plate with a centered circular hole under
+        uniaxial tension (fixed at X=0, loaded at X=width_mm) using real
+        solid FEA: a build123d plate meshed with gmsh into quadratic
+        (C3D10) tets, refined near the hole, solved by CalculiX.
+
+        Validates against Kirsch's classical closed-form result: a small
+        hole in a wide plate under remote uniaxial tension has a stress
+        concentration factor of exactly 3.0 at the hole edge perpendicular
+        to loading, in the small-hole/infinite-plate limit.
+
+        Args:
+            width_mm: Plate dimension along the loading direction (X). Must
+                be positive.
+            height_mm: Plate dimension transverse to loading (Y). Must be
+                positive.
+            thickness_mm: Plate thickness (Z). Must be positive.
+            hole_diameter_mm: Diameter of the centered hole. Must be
+                positive and at most `_MAX_HOLE_TO_WIDTH_RATIO * width_mm`
+                — Kirsch's Kt=3.0 requires the small-hole/infinite-plate
+                approximation; a larger hole needs a finite-width
+                correction this agent doesn't implement.
+            tensile_stress_mpa: Remote/nominal applied tensile stress
+                (MPa), applied as a statically-equivalent distributed
+                nodal load on the X=width_mm face. Must be positive.
+            youngs_modulus_mpa: Young's modulus (MPa). Must be positive.
+            poissons_ratio: Poisson's ratio.
+
+        Returns:
+            PlateWithHoleResult with the FEA stress concentration factor
+            and its error against Kirsch's theoretical Kt=3.0.
+
+        Raises:
+            StructuresEvaluationError: If inputs are invalid, ccx.exe
+                cannot be located, meshing/solving fails or times out, or
+                the output can't be parsed.
+        """
+        self._validate_plate_inputs(
+            width_mm, height_mm, thickness_mm, hole_diameter_mm, tensile_stress_mpa, youngs_modulus_mpa
+        )
+
+        ccx_path = _find_ccx_path()
+        if ccx_path is None:
+            raise StructuresEvaluationError(
+                "ccx.exe (CalculiX) not found on PATH or at the default MSYS2 "
+                f"install location ({_DEFAULT_CCX_PATH}). Install it via "
+                "scripts/install_calculix_windows.sh — see vendor/calculix/README.md."
+            )
+
+        with tempfile.TemporaryDirectory(prefix="aeroforge_ccx_plate_") as work_dir:
+            step_path = os.path.join(work_dir, f"{_PLATE_JOBNAME}.step")
+            plate = build_plate_with_hole(width_mm, height_mm, thickness_mm, hole_diameter_mm)
+            export_step(plate, step_path)
+
+            mesh = mesh_plate_with_hole(step_path, width_mm, height_mm, thickness_mm, hole_diameter_mm)
+
+            inp_path = os.path.join(work_dir, f"{_PLATE_JOBNAME}.inp")
+            with open(inp_path, "w", encoding="ascii") as f:
+                f.write(
+                    self._build_plate_input_deck(
+                        mesh, youngs_modulus_mpa, poissons_ratio, tensile_stress_mpa, height_mm, thickness_mm
+                    )
+                )
+
+            self._run_ccx(ccx_path, work_dir, jobname=_PLATE_JOBNAME, timeout=_PLATE_CCX_TIMEOUT_S)
+
+            dat_text = self._read_dat_file(work_dir, _PLATE_JOBNAME)
+
+        max_abs_sxx_mpa = self._parse_max_abs_sxx(dat_text, jobname=_PLATE_JOBNAME)
+
+        nominal_stress_mpa = tensile_stress_mpa
+        kt = max_abs_sxx_mpa / nominal_stress_mpa
+        error_pct = abs(kt - _KIRSCH_KT) / _KIRSCH_KT * 100
+
+        return PlateWithHoleResult(
+            max_stress_mpa=max_abs_sxx_mpa,
+            nominal_stress_mpa=nominal_stress_mpa,
+            stress_concentration_factor=kt,
+            theoretical_kt=_KIRSCH_KT,
+            error_pct=error_pct,
+        )
+
+    def _validate_plate_inputs(
+        self,
+        width_mm: float,
+        height_mm: float,
+        thickness_mm: float,
+        hole_diameter_mm: float,
+        tensile_stress_mpa: float,
+        youngs_modulus_mpa: float,
+    ) -> None:
+        for name, value in (
+            ("width_mm", width_mm),
+            ("height_mm", height_mm),
+            ("thickness_mm", thickness_mm),
+            ("hole_diameter_mm", hole_diameter_mm),
+            ("tensile_stress_mpa", tensile_stress_mpa),
+            ("youngs_modulus_mpa", youngs_modulus_mpa),
+        ):
+            if value <= 0:
+                raise StructuresEvaluationError(f"'{name}' must be strictly positive, got {value}.")
+
+        max_hole_diameter = _MAX_HOLE_TO_WIDTH_RATIO * width_mm
+        if hole_diameter_mm > max_hole_diameter:
+            raise StructuresEvaluationError(
+                f"hole_diameter_mm ({hole_diameter_mm} mm) is too large relative to width_mm "
+                f"({width_mm} mm) for Kirsch's stress concentration solution: it requires the "
+                f"small-hole/infinite-plate approximation, valid here only for hole_diameter_mm "
+                f"<= {_MAX_HOLE_TO_WIDTH_RATIO} * width_mm ({max_hole_diameter} mm). A larger "
+                "hole would need a finite-width correction factor this agent doesn't implement — "
+                "it isn't the same validation target, so it's rejected rather than silently "
+                "compared against the wrong theoretical Kt."
+            )
+
+    def _build_plate_input_deck(
+        self,
+        mesh: PlateMesh,
+        youngs_modulus_mpa: float,
+        poissons_ratio: float,
+        tensile_stress_mpa: float,
+        height_mm: float,
+        thickness_mm: float,
+    ) -> str:
+        total_force_n = tensile_stress_mpa * height_mm * thickness_mm
+        force_per_node_n = total_force_n / len(mesh.loaded_node_ids)
+
+        boundary_lines = [f"{node_id}, 1, 1" for node_id in mesh.fixed_node_ids]
+        # Minimal extra constraints to remove rigid-body motion without
+        # over-constraining: one node's Y/Z translation, plus a second
+        # node's Z to remove the remaining X-axis rotation (see
+        # plate_with_hole.py's mesh_plate_with_hole for how these are
+        # picked). The whole-face UX=0 above already blocks rotation about
+        # Y and Z, so only 3 more DOFs (Y-trans, Z-trans, X-rotation) need
+        # pinning.
+        boundary_lines.append(f"{mesh.center_node_id}, 2, 3")
+        boundary_lines.append(f"{mesh.offset_node_id}, 3, 3")
+
+        cload_lines = [f"{node_id}, 1, {force_per_node_n:.6f}" for node_id in mesh.loaded_node_ids]
+
+        return "\n".join(
+            [
+                "*NODE",
+                *mesh.node_lines,
+                "*NSET, NSET=NALL, GENERATE",
+                f"1, {mesh.max_node_id}, 1",
+                "*ELEMENT, TYPE=C3D10, ELSET=VOL",
+                *mesh.element_lines,
+                "*SOLID SECTION, ELSET=VOL, MATERIAL=STEEL",
+                "*MATERIAL, NAME=STEEL",
+                "*ELASTIC",
+                f"{youngs_modulus_mpa:.6f}, {poissons_ratio:.6f}",
+                "*BOUNDARY",
+                *boundary_lines,
+                "*STEP",
+                "*STATIC, SOLVER=SPOOLES",
+                "*CLOAD",
+                *cload_lines,
+                "*NODE PRINT, NSET=NALL",
+                "U",
+                "*EL PRINT, ELSET=VOL",
+                "S",
+                "*END STEP",
+                "",
+            ]
         )
 
     def _validate_inputs(
@@ -213,37 +423,45 @@ class StructuresAgent:
             ]
         )
 
-    def _run_ccx(self, ccx_path: str, work_dir: str) -> None:
+    def _run_ccx(self, ccx_path: str, work_dir: str, *, jobname: str, timeout: int) -> None:
         env = os.environ.copy()
         env["PATH"] = os.path.dirname(ccx_path) + os.pathsep + env.get("PATH", "")
 
         try:
             subprocess.run(
-                [ccx_path, _JOBNAME],
+                [ccx_path, jobname],
                 cwd=work_dir,
                 env=env,
-                timeout=_CCX_TIMEOUT_S,
+                timeout=timeout,
                 capture_output=True,
                 text=True,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise StructuresEvaluationError(
-                f"ccx.exe did not finish within {_CCX_TIMEOUT_S}s. This should not "
+                f"ccx.exe did not finish within {timeout}s. This should not "
                 "happen if the generated .inp deck's *STATIC card specifies "
                 "SOLVER=SPOOLES — the bundled PaStiX default solver hangs "
                 "indefinitely on this machine. See vendor/calculix/README.md."
             ) from exc
 
-    def _parse_dat_file(self, dat_text: str, tip_node: int) -> tuple[float, float]:
+    def _read_dat_file(self, work_dir: str, jobname: str) -> str:
+        dat_path = os.path.join(work_dir, f"{jobname}.dat")
+        if not os.path.isfile(dat_path):
+            raise StructuresEvaluationError(
+                f"ccx.exe finished but produced no {jobname}.dat output file — "
+                "the solve likely failed. Check the generated .inp for errors."
+            )
+        with open(dat_path, encoding="latin-1") as f:
+            return f.read()
+
+    def _parse_node_displacement(self, dat_text: str, node_id_wanted: int, *, jobname: str) -> float:
         lines = dat_text.splitlines()
-        tip_vy_mm: float | None = None
-        max_abs_sxx_mpa: float | None = None
+        vy_mm: float | None = None
 
         i = 0
         while i < len(lines):
-            line = lines[i]
-            if "displacements (vx,vy,vz)" in line:
+            if "displacements (vx,vy,vz)" in lines[i]:
                 i += 1
                 while i < len(lines) and not lines[i].strip():
                     i += 1  # skip the blank separator line before the data rows
@@ -255,11 +473,26 @@ class StructuresAgent:
                         except ValueError:
                             i += 1
                             continue
-                        if node_id == tip_node:
-                            tip_vy_mm = float(parts[2])
+                        if node_id == node_id_wanted:
+                            vy_mm = float(parts[2])
                     i += 1
                 continue
-            if "stresses (elem, integ.pnt.,sxx" in line:
+            i += 1
+
+        if vy_mm is None:
+            raise StructuresEvaluationError(
+                f"Could not find node {node_id_wanted}'s displacement in ccx output "
+                f"({jobname}.dat) — the solve may have failed silently."
+            )
+        return vy_mm
+
+    def _parse_max_abs_sxx(self, dat_text: str, *, jobname: str) -> float:
+        lines = dat_text.splitlines()
+        max_abs_sxx_mpa: float | None = None
+
+        i = 0
+        while i < len(lines):
+            if "stresses (elem, integ.pnt.,sxx" in lines[i]:
                 i += 1
                 while i < len(lines) and not lines[i].strip():
                     i += 1  # skip the blank separator line before the data rows
@@ -273,15 +506,9 @@ class StructuresAgent:
                 continue
             i += 1
 
-        if tip_vy_mm is None:
-            raise StructuresEvaluationError(
-                f"Could not find tip node {tip_node}'s displacement in ccx output "
-                f"({_JOBNAME}.dat) — the solve may have failed silently."
-            )
         if max_abs_sxx_mpa is None:
             raise StructuresEvaluationError(
-                f"Could not find stress output in ccx output ({_JOBNAME}.dat) — "
+                f"Could not find stress output in ccx output ({jobname}.dat) — "
                 "the solve may have failed silently."
             )
-
-        return tip_vy_mm, max_abs_sxx_mpa
+        return max_abs_sxx_mpa
