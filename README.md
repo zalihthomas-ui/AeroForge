@@ -24,7 +24,7 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). Working today (v0.8):
+time (see `docs/architecture/roadmap.md`). Working today (v0.9):
 
 ```text
 Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / STL
@@ -32,8 +32,10 @@ Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / 
 
 for two components: a mounting **bracket** and a **wing** planform with a
 real NACA airfoil cross-section (see `examples/bracket/`, `examples/wing/`)
-— plus real-solver Aerodynamics and Structures agents, now both wired to
-the actual CAD geometry:
+— plus real-solver Aerodynamics, Structures, and (new in v0.9)
+Manufacturing agents, and a genuinely closed optimization loop for the
+wing (Design Agent → optimizer → **materialized, re-verified CAD**, the
+first complete "prompt to optimized CAD" chain in this project):
 
 - **Aerodynamics Agent** (`examples/airfoil/`, `examples/wing/aero_summary.py`,
   `examples/wing/optimize.py`): NACA airfoils via NeuralFoil (a validated
@@ -43,7 +45,9 @@ the actual CAD geometry:
   wing's own CAD parameters for real Reynolds number/lift/drag, plus a
   closed-loop optimizer (`engineering/analysis/wing_optimizer.py`) that
   finds the best airfoil/angle-of-attack combination for max L/D via a
-  real `scipy` optimizer.
+  real `scipy` optimizer — and (new in v0.9) `wing_materializer.py`
+  actually **regenerates real CAD** for that optimum and re-verifies it
+  reproduces the optimizer's numbers (`examples/wing/materialize.py`).
 - **Structures Agent** (`examples/beam/`, `examples/plate_with_hole/`,
   `examples/bracket/structural_analysis.py`, `examples/bracket/optimize.py`):
   real **CalculiX** FEA — a parametric cantilever beam (validated against
@@ -57,10 +61,14 @@ the actual CAD geometry:
   (`engineering/analysis/bracket_optimizer.py`) finds the minimum-mass
   bracket thickness satisfying a stress constraint via bounded
   root-finding against real FEA.
+- **Manufacturing Agent** (new in v0.9, `examples/bracket/manufacturability.py`):
+  real CNC design-for-manufacturability checks — drill depth-to-diameter
+  ratio and actual hole-to-edge clearance — on the actual bracket
+  geometry, each against a sourced, documented machining convention.
 
-Manufacturing analysis and the frontend dashboard are real, unimplemented
-future phases — not stubbed out as if they worked. Do not assume they
-exist yet just because the mission doc describes them.
+The frontend dashboard is a real, unimplemented future phase — not
+stubbed out as if it worked. Do not assume it exists yet just because the
+mission doc describes it.
 
 ## Repository layout
 
@@ -98,7 +106,9 @@ python examples/beam/run.py
 python examples/plate_with_hole/run.py
 python examples/wing/aero_summary.py
 python examples/wing/optimize.py
+python examples/wing/materialize.py
 python examples/bracket/structural_analysis.py
+python examples/bracket/manufacturability.py
 python examples/bracket/optimize.py    # slow: real closed-loop FEA optimization, ~10 min
 ```
 

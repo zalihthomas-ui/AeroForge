@@ -599,14 +599,114 @@ real-CalculiX test — together push a full local run to ~12 minutes).
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket analysis + optimization | dune |
 
-## Next milestone: v0.9 (not yet scoped)
+## Milestone: v0.9 — first Manufacturing Agent + optimizer-to-CAD closed loop (DONE)
 
-Candidates: Phase 6 (manufacturing intelligence) — CNC/additive
-manufacturability checks on the actual bracket/wing geometry, following
-the same evaluate-honestly, validate-against-something-real approach used
-for CFD/FEA rather than inventing scoring heuristics with no ground
-truth; multi-parameter bracket optimization (thickness + hole placement
-together, needing a proper multi-dimensional method rather than 1D
-root-finding); or resolving the wing's remaining approximations (no
-twist/washout, aero not yet coupled to the actual airfoil solid) toward a
-fuller flagship UAV wing demonstration (mission doc §20).
+Two parallel, non-overlapping tracks, both landed 2026-09-15.
+
+### Manufacturing Agent (Phase 6, first version)
+
+`agents/manufacturing/` had been a placeholder since v0.1. Two real,
+sourced CNC design-for-manufacturability checks on the **actual**
+`agents/geometry/bracket.py` component:
+
+- **Drill depth-to-diameter ratio** (`thickness_mm / hole_diameter_mm`)
+  against a 5:1 standard jobber-drill limit — a widely cited CNC
+  design-for-manufacturability rule of thumb (e.g. Protolabs' design
+  guides), documented as convention rather than asserted as a rigid
+  standard.
+- **Real hole-to-part-edge clearance** — the genuine worst-case minimum
+  distance from any hole's edge to the nearest part edge (checked in both
+  length and width directions, across every hole), against a
+  1x-hole-diameter minimum (Xometry/Protolabs convention). On the
+  reference bracket this is 8.5mm — genuinely tight against the 8mm
+  requirement, not the much looser 36mm a naive width-only check would
+  report. `agents/geometry/validation.py`'s existing `MIN_EDGE_MARGIN_MM`
+  (2mm) only guarantees non-degenerate geometry; this is a materially
+  tighter, real manufacturability bar on top of it.
+
+**The additive-manufacturing overhang stretch goal was investigated and
+deliberately not shipped**: the bracket's planar faces are geometrically
+guaranteed zero-overhang in Z-up build orientation (a plain box — every
+planar face normal has Z in {0, +1, -1}), so a planar-only check would
+always trivially report "fully self-supporting," providing no real
+signal. The bracket's actual overhang risk is entirely in its cylindrical
+hole walls, which need point-sampling or parametric-surface analysis to
+check properly — explicit future work, not silently skipped, and not
+padded into the deliverable just to have shipped *something* for the
+stretch goal.
+
+A genuine duplication was also caught and fixed in passing: the hole-
+spacing formula existed independently in both `bracket.py` and
+`bracket_mesh.py`; factored into a single `hole_center_x_positions()` now
+shared by geometry, structures, and this new manufacturing check —
+verified as a pure refactor via the unchanged existing test suite.
+
+`examples/bracket/manufacturability.py` demonstrates both the reference
+bracket (manufacturable) and a deliberately thick/narrow-hole case that
+genuinely fails the drill-ratio check.
+
+### Closing the loop: optimizer → revised CAD
+
+Mission doc §14's closed-loop diagram ends in "OPTIMIZATION AGENT →
+REVISED CAD → ITERATE" — never implemented until now. v0.8's bracket
+optimizer and v0.7's wing optimizer both found *numeric* optima, but
+nothing then generated the actual CAD geometry for the chosen design.
+
+- `engineering/analysis/wing_materializer.py` —
+  `materialize_optimal_wing(base_spec, optimization_result, output_dir,
+  ...) -> MaterializedWingResult`: takes a `WingOptimizationResult`,
+  builds the revised `EngineeringSpec` with the winning airfoil, generates
+  real geometry via `GeometryAgent`, exports STEP/STL/3MF, and — a genuine
+  consistency check, not just trusting the optimizer — **re-evaluates**
+  aerodynamics on the final materialized spec at the optimizer's own
+  optimal angle of attack, comparing L/D against what the optimizer
+  originally reported.
+- Verified end-to-end: reference wing (NACA 4412 winner, α=6.16°) 
+  produces a real 562KB STEP / 34KB STL / 11KB 3MF, and the re-analysis
+  reproduces the optimizer's L/D=101.71 with **0.0000% discrepancy** —
+  exactly as expected for an identical underlying evaluation, and a
+  meaningful confirmation that nothing was lost or inconsistent between
+  the optimization and materialization stages.
+- `examples/wing/materialize.py` demonstrates the first genuinely
+  complete chain in this project: natural-language requirement → Design
+  Agent → closed-loop aerodynamic optimizer → materialized, re-verified
+  CAD.
+
+Explicitly **out of scope**: closing the same loop for the bracket
+optimizer (v0.8) — the bracket's revised-CAD step would just re-run
+`build_bracket` with the optimal thickness, which is straightforward, but
+wasn't asked for this round; and any iteration back into a *further*
+optimization pass (this is one closed loop, not yet a multi-generation
+iterate-until-convergence process).
+
+Two coordination notes worth recording honestly: this round repeated
+v0.8's worktree-isolation mistake once (task B work briefly created
+outside its proper worktree — caught immediately, no work lost, same fix
+pattern as before) and needed a trivial post-hoc fix (a Windows console
+encoding issue with a unicode degree symbol in example output, garbling
+to `?` — fixed before merge, matching every other example's plain-text
+convention).
+
+161/161 (non-slow-FEA) tests passing.
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket analysis + optimization + CAD materialization | dune |
+
+## Next milestone: v0.10 (not yet scoped)
+
+Candidates: close the same optimizer-to-CAD loop for the bracket (v0.8's
+optimizer already exists; the materialization step is simpler than the
+wing's since it's just `build_bracket` at the optimal thickness); extend
+Manufacturing Agent checks to the wing (sheet-metal or composite layup
+checks, per mission doc §11, once a suitable wing manufacturing process
+is chosen — no invented heuristics); multi-parameter bracket optimization
+(thickness + hole placement together, needing a proper multi-dimensional
+method rather than 1D root-finding); or resolving the wing's remaining
+approximations (no twist/washout, aero not yet coupled to the actual
+airfoil solid) toward a fuller flagship UAV wing demonstration (mission
+doc §20).
