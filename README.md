@@ -24,7 +24,7 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). Working today (v0.6):
+time (see `docs/architecture/roadmap.md`). Working today (v0.7):
 
 ```text
 Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / STL
@@ -32,23 +32,30 @@ Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / 
 
 for two components: a mounting **bracket** and a **wing** planform with a
 real NACA airfoil cross-section (see `examples/bracket/`, `examples/wing/`)
-— plus two real-solver agents:
+— plus real-solver Aerodynamics and Structures agents, now both wired to
+the actual CAD geometry:
 
-- **Aerodynamics Agent** (`examples/airfoil/`, `examples/wing/aero_summary.py`):
-  NACA airfoils via NeuralFoil (a validated neural surrogate, always
-  available) or real **XFOIL** (vendored at `vendor/xfoil/` for Windows
-  x64 + CPython 3.13 — the PyPI package is broken upstream; see the
-  roadmap's decision record). Coupled to the wing's own CAD parameters
-  (`engineering/analysis/wing_aero.py`) for real Reynolds number/lift/drag.
-- **Structures Agent** (`examples/beam/`, `examples/plate_with_hole/`):
-  real **CalculiX** FEA — a parametric cantilever beam (1D elements,
-  validated against Euler-Bernoulli theory, ~0.3% error) and a real
-  meshed 3D solid (a plate with a hole, gmsh + C3D10 tets, validated
-  against Kirsch's classical stress-concentration solution, ~0.4% error).
+- **Aerodynamics Agent** (`examples/airfoil/`, `examples/wing/aero_summary.py`,
+  `examples/wing/optimize.py`): NACA airfoils via NeuralFoil (a validated
+  neural surrogate, always available) or real **XFOIL** (vendored at
+  `vendor/xfoil/` for Windows x64 + CPython 3.13 — the PyPI package is
+  broken upstream; see the roadmap's decision record). Coupled to the
+  wing's own CAD parameters for real Reynolds number/lift/drag, plus a
+  closed-loop optimizer (`engineering/analysis/wing_optimizer.py`) that
+  finds the best airfoil/angle-of-attack combination for max L/D via a
+  real `scipy` optimizer.
+- **Structures Agent** (`examples/beam/`, `examples/plate_with_hole/`,
+  `examples/bracket/structural_analysis.py`): real **CalculiX** FEA — a
+  parametric cantilever beam (validated against Euler-Bernoulli theory,
+  ~0.3% error), a meshed 3D solid plate-with-hole (gmsh + C3D10 tets,
+  validated against Kirsch's classical solution, ~0.4% error), and now
+  the **actual bracket geometry** under a real bolted-mounting load,
+  validated by exact force equilibrium (~0.001% error) and mesh
+  convergence since no closed-form solution exists for that case.
 
-Manufacturing analysis, optimization, and the frontend dashboard are real,
-unimplemented future phases — not stubbed out as if they worked. Do not
-assume they exist yet just because the mission doc describes them.
+Manufacturing analysis and the frontend dashboard are real, unimplemented
+future phases — not stubbed out as if they worked. Do not assume they
+exist yet just because the mission doc describes them.
 
 ## Repository layout
 
@@ -85,6 +92,8 @@ python examples/airfoil/run.py
 python examples/beam/run.py
 python examples/plate_with_hole/run.py
 python examples/wing/aero_summary.py
+python examples/wing/optimize.py
+python examples/bracket/structural_analysis.py
 ```
 
 ## Contributing

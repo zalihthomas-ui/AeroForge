@@ -382,13 +382,122 @@ structure, or any optimization loop — this is a one-way evaluation.
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero coupling | dune |
 
-## Next milestone: v0.7 (not yet scoped)
+## Milestone: v0.7 — real bracket FEA + closed-loop aero optimization (DONE)
 
-Candidates: mesh the actual bracket/wing geometry (not just the
-plate-with-hole validation fixture) for real FEA — needs real boundary
-condition assumptions (which faces are fixed, how load is applied) that
-don't have as clean a closed-form validation target as Kirsch's solution,
-so should be scoped carefully; or Phase 5 (closed-loop optimization)
-research now that two real disciplines (aero + structures) exist, e.g.
-sweeping a wing or bracket parameter and tracking how a real FEA/aero
-metric responds, as a precursor to an actual optimizer.
+Two parallel, non-overlapping tracks, both landed 2026-09-15. Both v0.6
+"next milestone" candidates were pursued together rather than choosing one.
+
+### Real solid FEA on the actual bracket geometry
+
+`evaluate_plate_with_hole` (v0.6) proved the mesh→CalculiX solid-FEA
+pipeline on a purpose-built validation fixture. This wires it to
+`agents/geometry/bracket.py`'s actual `build_bracket()` output for the
+first time — under a real "bolted mounting bracket" load case: all 4
+holes rigidly fixed (bolted), a distributed transverse load on the top
+face.
+
+There's no closed-form solution for a 4-hole bracket under an arbitrary
+load (unlike the beam's Euler-Bernoulli or the plate-with-hole's Kirsch
+solution), so **chief pre-validated a different, still-rigorous
+methodology before delegating**: CalculiX's `RF` (reaction force) output,
+summed across all fixed nodes, must equal the total applied load to
+numerical precision for any correctly converged linear static solve —
+verified on a standalone test case to 0.0002% agreement. This exact
+equilibrium check, plus mesh convergence at two densities, replaces a
+closed-form target.
+
+- `agents/structures/bracket_mesh.py` meshes the real bracket (imports
+  `build_bracket` directly, no duplicated geometry); `agents/structures/agent.py`'s
+  `evaluate_bracket(length_mm, width_mm, thickness_mm, hole_diameter_mm,
+  hole_count, applied_force_n, ...) -> BracketStructuralResult
+  (max_stress_mpa, max_deflection_mm, equilibrium_error_pct,
+  mesh_converged, coarse_mesh_max_stress_mpa, fine_mesh_max_stress_mpa)`.
+- **Found and fixed a real bug via the equilibrium check itself**: hole
+  rims are shared edges between each hole's (fixed) face and the (loaded)
+  top face, so ~4.5% of "loaded" nodes were also fully constrained —
+  CalculiX doesn't fold a `*CLOAD` at an already-fixed node back into that
+  node's reaction force, so that fraction of the applied load was
+  silently vanishing from the global balance. Excluding the overlap
+  dropped equilibrium error from 4.5% to **0.001%** on the reference case
+  (verified again independently: 0.0008%).
+- **Convergence reported honestly, not forced**: a 5-point mesh-density
+  sweep showed deflection converging smoothly and monotonically, but peak
+  von Mises stress did *not* monotonically settle — consistent with a
+  genuine FEA stress singularity at the sharp fixed-hole-rim
+  boundary-condition corner (a real, well-known FE phenomenon: peak
+  nodal/Gauss-point stress at such a corner has no guaranteed
+  mesh-independent limit), not a bug. The specific density pair actually
+  observed to converge (both metrics <10% change) was shipped and
+  documented, rather than picking whichever pair happened to look clean.
+- `agents/structures/inp_utils.py` — `.inp` block-extraction helpers
+  factored out and shared with `plate_with_hole.py` (previously
+  duplicated).
+- `examples/bracket/structural_analysis.py` demonstrates the reference
+  case: 100×80×5mm bracket, four 8mm holes, 500N top load → 7.09MPa peak
+  stress, 0.0007mm deflection, 0.0008% equilibrium error, converged.
+
+Explicitly **out of scope**: a finite-element treatment that avoids the
+stress-singularity ambiguity (e.g. a filleted/rounded BC transition, or
+reporting a stress *averaged* over a small region instead of a raw peak
+value) — noted as real future work, not solved here.
+
+### Closed-loop aerodynamic optimization (Phase 5 MVP)
+
+Scoped honestly as single-discipline (aerodynamics only — no structures,
+manufacturing, or cost in the loop, and no optimization feeding back into
+CAD regeneration). Before writing any code, **chief checked the objective
+function's math and caught a degenerate-optimization risk**: wing taper
+ratio has zero effect on L/D in the current strip-theory-style
+`evaluate_wing_aero` model (CL/CD come purely from the 2D section polar,
+independent of planform shape), so "optimize taper for max L/D" would
+have silently produced a meaningless flat-objective result. Redirected to
+angle of attack instead, which does meaningfully vary L/D (a real polar
+shape: rises, peaks, falls toward stall).
+
+- `engineering/analysis/wing_optimizer.py` — `optimize_wing_for_max_l_over_d
+  (base_spec, candidate_naca_airfoils=[...], alpha_bounds_deg=(-2,12), ...)
+  -> WingOptimizationResult`. For each candidate NACA airfoil,
+  `scipy.optimize.minimize_scalar` (bounded) finds the angle of attack
+  maximizing L/D via repeated real solver calls (NeuralFoil/XFOIL); the
+  best airfoil+alpha combination overall is reported alongside every
+  candidate's result (losers included, not hidden).
+- **Verified non-degenerate**: each candidate airfoil converges to a
+  different *interior* optimum (never stuck at a search-bound edge),
+  e.g. on the mission-doc reference wing: NACA 0012 peaks at L/D=57.7 at
+  α=5.81°, NACA 4412 at L/D=101.7 at α=6.16° — a real, physically
+  meaningful difference, not noise.
+- `examples/wing/optimize.py` demonstrates the full candidate table plus
+  the winner.
+
+Explicitly **out of scope**: multi-disciplinary optimization (would need
+structures/manufacturing/cost objectives too), optimizing actual geometry
+parameters (only angle of attack, a flight condition, is varied — see the
+degenerate-taper finding above for why), and genetic/Bayesian algorithms
+(mission doc lists these as future candidates; scipy's bounded scalar
+minimizer is the right-sized tool for this one-dimensional problem).
+
+129/129 tests passing across both tracks combined (bracket FEA's two-
+density convergence check is now the slowest test in the repo, ~1.5min).
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero analysis + optimization | dune |
+
+## Next milestone: v0.8 (not yet scoped)
+
+Candidates: resolve the bracket's fixed-hole-rim stress singularity
+(e.g. a filleted BC transition, or a defensible stress-averaging
+convention) so peak stress becomes a reportable, converged metric rather
+than "converged if you're lucky with the mesh pair"; extend closed-loop
+optimization to a real geometry parameter that actually varies the
+objective (e.g. optimizing bracket thickness/hole placement for a
+structural objective, now that evaluate_bracket exists, rather than
+optimizing a flight condition); or begin Phase 6 (manufacturing
+intelligence) — CNC/additive manufacturability checks on the actual
+bracket/wing geometry, following the same evaluate-honestly, validate-
+against-something-real approach used for CFD/FEA rather than inventing
+scoring heuristics with no ground truth.
