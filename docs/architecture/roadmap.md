@@ -697,16 +697,119 @@ convention).
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket analysis + optimization + CAD materialization | dune |
 
-## Next milestone: v0.10 (not yet scoped)
+## Milestone: v0.10 — real wing structural FEA + bracket optimizer-to-CAD loop (DONE)
 
-Candidates: close the same optimizer-to-CAD loop for the bracket (v0.8's
-optimizer already exists; the materialization step is simpler than the
-wing's since it's just `build_bracket` at the optimal thickness); extend
-Manufacturing Agent checks to the wing (sheet-metal or composite layup
-checks, per mission doc §11, once a suitable wing manufacturing process
-is chosen — no invented heuristics); multi-parameter bracket optimization
-(thickness + hole placement together, needing a proper multi-dimensional
-method rather than 1D root-finding); or resolving the wing's remaining
-approximations (no twist/washout, aero not yet coupled to the actual
-airfoil solid) toward a fuller flagship UAV wing demonstration (mission
-doc §20).
+Two parallel, non-overlapping tracks, both landed 2026-09-15.
+
+### Real solid FEA on the actual wing, loaded by real aerodynamics
+
+Mission doc §20's flagship UAV wing demonstration needs mass, L/D, *and*
+safety factor. Mass and L/D existed (v0.5/v0.7); structural safety factor
+for a wing did not — `evaluate_cantilever_beam` and `evaluate_bracket`
+only ever handled flat/beam idealizations. This closes that gap the same
+way v0.6→v0.9 closed the others: mesh the actual `agents/geometry/wing.py`
+solid (real NACA airfoil sections, not an idealization) and load it with
+a **real computed value**, not a hand-picked one —
+`engineering.analysis.wing_aero.evaluate_wing_aero`'s own lift_n. First
+time an aerodynamic result drives a structural load in this project.
+
+No closed-form solution exists for this geometry (same situation as the
+bracket), so validated the same rigorous way: exact force equilibrium
+(0.005-0.02% error on the reference case) plus mesh convergence, with the
+same hot-spot stress convention reused unchanged for the same fixed-edge
+singularity pattern found on the bracket.
+
+Two genuinely new, non-obvious problems surfaced and were fixed — this
+geometry is meaningfully harder to mesh than the bracket's flat plate:
+
+1. **Real-airfoil trailing-edge sliver elements.** A NACA 0012's trailing
+   edge is only ~0.25% of chord thick (~0.6mm on a 240mm root chord). The
+   bracket's local Distance+Threshold mesh refinement field silently
+   *overrode* gmsh's automatic curvature-adaptive sizing rather than
+   combining with it, so its coarser `SizeMax` won right at the
+   razor-thin TE — producing genuine negative-volume ("sliver")
+   tetrahedra that CalculiX rejected outright ("nonpositive jacobian
+   determinant"). A properly-combined `Curvature`+`Min` field was tried
+   first (correct in principle) but didn't finish computing in over 10
+   minutes on this geometry — abandoned honestly rather than forced. The
+   fix that actually works: drop the custom field entirely, rely solely
+   on gmsh's global curvature-adaptive sizing — zero bad elements, meshes
+   in under a second.
+2. **No face exists at the wing's root.** `build_wing()` mirrors both
+   halves into one fused solid, so after that boolean union y=0 is purely
+   interior geometry — no 2D face to apply a boundary condition to.
+   Fixed by intersecting the full wing with a half-space to recover a
+   genuine half-wing solid with a real planar root face (verified to have
+   exactly half the full wing's volume) — which also enabled a **proper
+   symmetry-plane BC** (`UY=0` only at the root) instead of full fixity,
+   since the wing is physically continuous through its centerline under
+   symmetric loading and full fixity there would have been wrong (it
+   would block natural in-plane elastic deformation, artificially
+   over-stiffening the result) — unlike the bracket's holes, which really
+   are rigid bolted connections.
+
+Reference case (1800mm span, NACA 0012, 65.7N real lift at 25 m/s
+cruise): `mesh_converged`=True, equilibrium error 0.005-0.02%,
+**safety factor ≈290** — correctly recognized and reported as physically
+sane rather than a suspicious number: this is a lightly loaded 1g steady
+cruise condition on an aluminum structure, not a limit-load case, so a
+large margin is expected, not a red flag. Material (aluminum 6061,
+documented as a simplification — a real small UAV wing might use
+foam-core composite) and all properties are configurable, not hardcoded.
+
+`agents/structures/wing_mesh.py`, `examples/wing/structural_analysis.py`.
+6 new tests.
+
+### Closing the optimizer-to-CAD loop for the bracket
+
+The wing got this in v0.9; the bracket's own optimizer (v0.8) still
+lacked it. `engineering/analysis/bracket_materializer.py` mirrors
+`wing_materializer.py`'s pattern (generate real CAD for the optimizer's
+chosen design, re-verify it reproduces the optimizer's numbers) — with
+one structural difference worth noting: the bracket path has no
+`EngineeringSpec`/`GeometryAgent` indirection the wing path does (those
+agents work with plain parameter dicts directly), so
+`materialize_optimal_bracket` calls `build_bracket()` directly rather
+than going through the Design/Geometry Agent pipeline.
+
+Independently verified twice by chief: the standalone real-FEA test alone
+(104.8s) and the full end-to-end example chaining optimization (~15 min,
+8 evaluations) plus materialization (~95s) — both confirm **0.0000%**
+stress discrepancy between the optimizer's prediction and the
+materialized design's actual re-analysis, `mesh_converged`=True,
+equilibrium error 0.00007%. Both mission-doc components (wing, bracket)
+now have complete "prompt → optimized → materialized → re-verified CAD"
+chains.
+
+`examples/bracket/materialize.py`. 4 new tests.
+
+Explicitly **out of scope**: an elliptical (Prandtl) spanwise lift
+distribution for the wing load (uniform distribution used instead,
+clearly documented as a first-order simplification); iterating the
+optimizer-to-CAD loop more than once (this is one closed loop per
+component, not yet a multi-generation converge-until-stable process).
+
+172/172 (non-slowest-bracket-FEA) tests passing.
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent + Manufacturing Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket analysis + optimization + CAD materialization | dune |
+
+## Next milestone: v0.11 (not yet scoped)
+
+Candidates: now that both wing and bracket have real, structurally
+validated safety factors and L/D via real solvers, assemble a genuine
+mission doc §20 flagship demonstration (Mass, L/D, Safety Factor,
+PASS/FAIL against MTOW=12kg/cruise=25m/s/span<2m/CL=0.6/SF>1.5-style
+requirements, iterating like the mission doc's own INITIAL→FINAL DESIGN
+example) — the first time every real discipline built so far (Design,
+Geometry, Aerodynamics, Structures, Manufacturing, Optimization) would
+work together on one end-to-end case; an elliptical spanwise lift
+distribution for the wing (currently uniform, documented as such);
+multi-parameter bracket optimization (thickness + hole placement
+together); or extending Manufacturing Agent checks to the wing once a
+real wing manufacturing process (sheet-metal, composite layup) is chosen.
