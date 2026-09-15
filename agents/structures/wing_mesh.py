@@ -32,7 +32,10 @@ to this geometry:
    `_TOP_SURFACE_NZ_THRESHOLD` are treated as top surface; this cleanly
    separates ~38 upper-camber faces from ~38 lower-camber faces plus a
    handful of near-vertical faces (leading/trailing edge, tip cap) that
-   are neither.
+   are neither. Each top-surface node's spanwise (Y) coordinate is
+   collected alongside it (`WingMesh.top_surface_y_mm`) so
+   agent.py's `_build_wing_input_deck` can weight the lift load
+   elliptically rather than uniformly across the span.
 
 3. **Mesh sizing must be curvature-adaptive, globally — not the bracket's
    local Distance+Threshold refinement.** A real NACA airfoil's trailing
@@ -94,13 +97,18 @@ _HALF_SPACE_MARGIN_MM = 2000.0
 @dataclass
 class WingMesh:
     """A C3D10 tet mesh of the half-wing (root to tip), as CalculiX .inp
-    text blocks, plus the node sets needed for boundary conditions."""
+    text blocks, plus the node sets needed for boundary conditions.
+
+    `top_surface_y_mm` is parallel to `top_surface_node_ids` (same order,
+    same length) — each node's spanwise position, needed to weight the
+    lift load elliptically (see agent.py's `_build_wing_input_deck`)."""
 
     node_lines: list[str]
     element_lines: list[str]
     max_node_id: int
     root_node_ids: list[int]
     top_surface_node_ids: list[int]
+    top_surface_y_mm: list[float]
     center_node_id: int
     offset_node_id: int
 
@@ -176,16 +184,23 @@ def mesh_half_wing(
         gmsh.model.mesh.generate(3)
 
         root_node_tags, root_coords = gmsh.model.mesh.getNodesForPhysicalGroup(2, root_group)
-        top_node_tags, _ = gmsh.model.mesh.getNodesForPhysicalGroup(2, top_group)
+        top_node_tags, top_coords = gmsh.model.mesh.getNodesForPhysicalGroup(2, top_group)
         root_node_ids = [int(tag) for tag in root_node_tags]
         root_coords = root_coords.reshape(-1, 3)
+        top_coords = top_coords.reshape(-1, 3)
 
         # Some top-surface nodes lie on the root-face perimeter (shared
         # edge); a node that's both fixed and loaded silently drops its
         # applied load from the reaction-force total (the exact bug found
         # and fixed on the bracket) — excluded here from the start.
         root_node_id_set = set(root_node_ids)
-        top_surface_node_ids = [int(tag) for tag in top_node_tags if int(tag) not in root_node_id_set]
+        top_surface_node_ids: list[int] = []
+        top_surface_y_mm: list[float] = []
+        for tag, coord in zip(top_node_tags, top_coords):
+            tag = int(tag)
+            if tag not in root_node_id_set:
+                top_surface_node_ids.append(tag)
+                top_surface_y_mm.append(float(coord[1]))
 
         raw_inp_path = os.path.splitext(step_path)[0] + "_raw.inp"
         gmsh.write(raw_inp_path)
@@ -208,6 +223,7 @@ def mesh_half_wing(
         max_node_id=max_node_id,
         root_node_ids=root_node_ids,
         top_surface_node_ids=top_surface_node_ids,
+        top_surface_y_mm=top_surface_y_mm,
         center_node_id=center_node_id,
         offset_node_id=offset_node_id,
     )

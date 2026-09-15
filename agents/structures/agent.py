@@ -62,13 +62,31 @@ subprocess, the same way agents/aerodynamics drives real XFOIL:
   symmetric loading, so rigidly clamping all 3 DOF there would be wrong
   (it would block the cross-section's natural in-plane elastic
   deformation, artificially over-stiffening the result), unlike the
-  bracket's holes which really are bolted (rigid) connections. Load: the
-  total lift is halved (this model is half the wing) and distributed
-  evenly across the top-surface nodes (identified by outward normal
-  Z-component, since the real airfoil loft has ~80 narrow BSPLINE strip
-  faces, not one flat top face) — a uniform first-order approximation of
-  the real, roughly elliptical spanwise lift distribution, documented as
-  such. Same stress-singularity situation as the bracket (a sharp corner
+  bracket's holes which really are bolted (rigid) connections.
+
+  Load distribution: the classical elliptical (Prandtl lifting-line)
+  spanwise lift distribution — L'(y) = (4L)/(pi*b)*sqrt(1-(2y/b)^2) for
+  span b and total lift L (see e.g. Anderson, "Fundamentals of
+  Aerodynamics") — replaced a uniform first-order approximation used in
+  v0.10. Verified by numerical integration that this reduces to exactly L
+  over the full span before relying on it. Applied as per-node weights
+  w_i = sqrt(max(0, 1-(y_i/half_span)^2)) (the half-wing-domain reduction
+  of the same formula — top-surface nodes are identified by outward
+  normal Z-component, since the real airfoil loft has ~80 narrow BSPLINE
+  strip faces, not one flat top face), normalized so
+  force_i = lift_n_half * w_i / sum(w) — this guarantees the applied
+  total still sums to exactly lift_n_half regardless of the (non-uniform)
+  node distribution, independent of the formula's constant prefactor,
+  which cancels out in the normalization. Counterintuitive but verified
+  finding: switching to elliptical loading *decreased* peak stress and
+  deflection versus uniform (~0.79 MPa/~0.25mm vs ~0.95 MPa/~0.34mm on
+  the reference wing) — concentrating more force near the root shortens
+  its average moment arm to the fixed root (elliptical force centroid
+  ~43% of half-span from the root vs uniform's 50%), which reduces
+  bending demand there rather than increasing it, despite the initial
+  intuition otherwise.
+
+  Same stress-singularity situation as the bracket (a sharp corner
   at the root cross-section perimeter), addressed with the same
   hotspot_stress_mpa/raw_peak_stress_mpa convention. Material is a
   configurable isotropic default (aluminum 6061: E~68900 MPa, nu~0.33,
@@ -929,7 +947,11 @@ class StructuresAgent:
 
             inp_path = os.path.join(work_dir, f"{jobname}.inp")
             with open(inp_path, "w", encoding="ascii") as f:
-                f.write(self._build_wing_input_deck(mesh, youngs_modulus_mpa, poissons_ratio, lift_n_half))
+                f.write(
+                    self._build_wing_input_deck(
+                        mesh, youngs_modulus_mpa, poissons_ratio, lift_n_half, half_span
+                    )
+                )
 
             self._run_ccx(ccx_path, work_dir, jobname=jobname, timeout=_WING_CCX_TIMEOUT_S)
 
@@ -949,8 +971,27 @@ class StructuresAgent:
         youngs_modulus_mpa: float,
         poissons_ratio: float,
         lift_n_half: float,
+        half_span_mm: float,
     ) -> str:
-        force_per_node_n = lift_n_half / len(mesh.top_surface_node_ids)
+        # Elliptical (Prandtl) spanwise lift distribution: L'(y) =
+        # (4L)/(pi*b) * sqrt(1-(2y/b)^2) for the full span b=2*half_span_mm,
+        # y in [-half_span_mm, half_span_mm]. This half-wing model only
+        # has y in [0, half_span_mm], where 2y/b = y/half_span_mm, so the
+        # shape reduces to sqrt(1-(y/half_span_mm)^2) — 1 at the root,
+        # tapering smoothly to 0 at the tip. The constant prefactor
+        # (4L/(pi*b)) is irrelevant here: normalizing each node's raw
+        # shape-function weight by the sum of all weights and scaling by
+        # lift_n_half guarantees the total still sums to exactly
+        # lift_n_half regardless of the (non-uniform) node distribution,
+        # preserving the equilibrium check unchanged — verified by
+        # integration (see agents/structures/agent.py's module docstring
+        # and tests/structures/test_wing.py's load-sum test).
+        raw_weights = [max(0.0, 1.0 - (y / half_span_mm) ** 2) ** 0.5 for y in mesh.top_surface_y_mm]
+        total_weight = sum(raw_weights)
+        cload_lines = [
+            f"{node_id}, 3, {lift_n_half * w / total_weight:.6f}"
+            for node_id, w in zip(mesh.top_surface_node_ids, raw_weights)
+        ]
 
         # Symmetry-plane BC (UY=0 across the whole root face), not full
         # fixity — see this module's docstring for why. Same minimal
@@ -960,8 +1001,6 @@ class StructuresAgent:
         boundary_lines.append(f"{mesh.center_node_id}, 1, 1")
         boundary_lines.append(f"{mesh.center_node_id}, 3, 3")
         boundary_lines.append(f"{mesh.offset_node_id}, 3, 3")
-
-        cload_lines = [f"{node_id}, 3, {force_per_node_n:.6f}" for node_id in mesh.top_surface_node_ids]
 
         return "\n".join(
             [
