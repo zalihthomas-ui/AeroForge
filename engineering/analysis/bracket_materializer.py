@@ -143,9 +143,10 @@ def materialize_optimal_bracket(
         raise BracketMaterializerError(f"Failed to export bracket CAD artifacts: {exc}") from exc
 
     # 5. Re-analysis on the final geometry
-    if not CALCULIX_AVAILABLE:
+    if not CALCULIX_AVAILABLE and structures_agent is None:
         raise BracketMaterializerError(
-            "CalculiX (ccx.exe) is not available on this machine. Cannot run bracket consistency re-analysis."
+            "CalculiX (ccx.exe) is not available on this machine and no structures_agent "
+            "was provided. Cannot run bracket consistency re-analysis."
         )
 
     agent = structures_agent or StructuresAgent()

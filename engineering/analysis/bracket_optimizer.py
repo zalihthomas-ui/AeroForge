@@ -188,9 +188,10 @@ def optimize_bracket_thickness_for_min_mass(
     if applied_force_n <= 0:
         raise BracketOptimizerError(f"applied_force_n must be strictly positive, got {applied_force_n}.")
 
-    if not CALCULIX_AVAILABLE:
+    if not CALCULIX_AVAILABLE and structures_agent is None:
         raise BracketOptimizerError(
-            "CalculiX (ccx.exe) is not available on this machine. Cannot run bracket FEA optimization."
+            "CalculiX (ccx.exe) is not available on this machine and no structures_agent "
+            "was provided. Cannot run bracket FEA optimization."
         )
 
     agent = structures_agent or StructuresAgent()
