@@ -2,6 +2,7 @@
 
 from agents.structures.agent import (
     CALCULIX_AVAILABLE,
+    BracketStructuralResult,
     PlateWithHoleResult,
     StructuralResult,
     StructuresAgent,
@@ -10,6 +11,7 @@ from agents.structures.agent import (
 
 __all__ = [
     "CALCULIX_AVAILABLE",
+    "BracketStructuralResult",
     "PlateWithHoleResult",
     "StructuralResult",
     "StructuresAgent",

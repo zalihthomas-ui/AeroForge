@@ -32,6 +32,7 @@ from dataclasses import dataclass
 import gmsh
 from build123d import Align, Box, Cylinder, Part, Pos
 
+from agents.structures.inp_utils import extract_mesh_blocks
 from cad.exporters import export_step
 
 # Mesh refinement (gmsh Distance+Threshold fields) relative to hole size and
@@ -145,7 +146,7 @@ def mesh_plate_with_hole(
     center_node_id = _closest_node(fixed_node_ids, fixed_coords, (0.0, 0.0, 0.0))
     offset_node_id = _closest_node(fixed_node_ids, fixed_coords, (0.0, height_mm * 0.3, 0.0))
 
-    node_lines, element_lines = _extract_mesh_blocks(raw_inp_path)
+    node_lines, element_lines = extract_mesh_blocks(raw_inp_path)
     max_node_id = int(node_lines[-1].split(",")[0])
 
     return PlateMesh(
@@ -167,24 +168,3 @@ def _closest_node(node_ids: list[int], coords, target: tuple[float, float, float
     return node_ids[best_index]
 
 
-def _extract_mesh_blocks(raw_inp_path: str) -> tuple[list[str], list[str]]:
-    with open(raw_inp_path, encoding="utf-8") as f:
-        lines = f.read().splitlines()
-
-    node_lines = _extract_block(lines, lambda line: line.strip() == "*NODE")
-    element_lines = _extract_block(
-        lines, lambda line: line.strip().upper().startswith("*ELEMENT") and "C3D10" in line.upper()
-    )
-    return node_lines, element_lines
-
-
-def _extract_block(lines: list[str], is_header) -> list[str]:
-    for i, line in enumerate(lines):
-        if is_header(line):
-            rows = []
-            j = i + 1
-            while j < len(lines) and not lines[j].lstrip().startswith("*"):
-                rows.append(lines[j])
-                j += 1
-            return rows
-    raise ValueError("Expected block header not found in gmsh's .inp output.")
