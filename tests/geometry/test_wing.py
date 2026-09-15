@@ -8,6 +8,7 @@ import aerosandbox as asb
 
 from agents.geometry.agent import GeometryAgent
 from agents.geometry.validation import GeometryValidationError
+from agents.geometry.wing import build_wing, estimate_wing_shell_mass_kg
 from engineering.requirements.schema import EngineeringSpec
 
 REFERENCE_PARAMETERS = {
@@ -137,3 +138,44 @@ def test_extreme_angles_are_rejected(field: str) -> None:
     params = {**REFERENCE_PARAMETERS, field: 89.9}
     with pytest.raises(GeometryValidationError):
         GeometryAgent().generate(_spec(**params))
+
+
+def test_reference_wing_shell_mass_is_physically_plausible() -> None:
+    """A solid-aluminum reference wing computes to ~14.7 kg -- heavier
+    than the entire 12 kg aircraft the mission doc's flagship demo
+    targets -- because real small UAV wings are a thin skin over a
+    lightweight internal structure, not solid material. The shell-mass
+    estimate should be well under the aircraft's MTOW and notably
+    lighter than that solid-aluminum figure."""
+    mass_kg = estimate_wing_shell_mass_kg(REFERENCE_PARAMETERS)
+
+    assert 0.0 < mass_kg < 12.0
+    solid_aluminum_mass_kg = build_wing(REFERENCE_PARAMETERS).volume * 1e-9 * 2700.0
+    assert mass_kg < solid_aluminum_mass_kg
+
+
+def test_shell_mass_scales_with_skin_thickness_and_density() -> None:
+    baseline = estimate_wing_shell_mass_kg(REFERENCE_PARAMETERS, skin_thickness_mm=0.5, material_density_kg_m3=1600.0)
+    doubled_thickness = estimate_wing_shell_mass_kg(
+        REFERENCE_PARAMETERS, skin_thickness_mm=1.0, material_density_kg_m3=1600.0
+    )
+    doubled_density = estimate_wing_shell_mass_kg(
+        REFERENCE_PARAMETERS, skin_thickness_mm=0.5, material_density_kg_m3=3200.0
+    )
+
+    assert doubled_thickness == pytest.approx(2 * baseline, rel=1e-9)
+    assert doubled_density == pytest.approx(2 * baseline, rel=1e-9)
+
+
+@pytest.mark.parametrize("field", ["skin_thickness_mm", "material_density_kg_m3"])
+def test_non_positive_shell_mass_inputs_are_rejected(field: str) -> None:
+    with pytest.raises(GeometryValidationError):
+        estimate_wing_shell_mass_kg(REFERENCE_PARAMETERS, **{field: 0.0})
+    with pytest.raises(GeometryValidationError):
+        estimate_wing_shell_mass_kg(REFERENCE_PARAMETERS, **{field: -1.0})
+
+
+def test_invalid_wing_parameters_are_rejected_via_build_wing() -> None:
+    params = {**REFERENCE_PARAMETERS, "wing_span": 0.0}
+    with pytest.raises(GeometryValidationError):
+        estimate_wing_shell_mass_kg(params)
