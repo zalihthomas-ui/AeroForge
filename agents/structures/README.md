@@ -1,4 +1,4 @@
-# Structures Agent (v0.5 beam, v0.6 solid FEA fixture, v0.7 real bracket)
+# Structures Agent (v0.5 beam, v0.6 solid FEA fixture, v0.7 real bracket + optimization)
 
 Three evaluation methods, all using **real CalculiX** (`ccx.exe`) — not a
 surrogate, the genuine FEA solver, the same way `agents/aerodynamics` can
@@ -17,17 +17,21 @@ drive real XFOIL:
   classical stress-concentration solution (Kt=3.0), ~0.4% error. See
   `agents/structures/plate_with_hole.py` and `examples/plate_with_hole/run.py`.
 - `evaluate_bracket(length_mm, width_mm, thickness_mm, hole_diameter_mm,
-  hole_count, applied_force_n, ...)` (v0.7): real 3D solid FEA on the
-  **actual** `agents/geometry/bracket.py` component, under a bolted-
-  mounting load case (holes fixed, top face loaded). No closed-form
-  solution exists here, so validated by **exact force equilibrium**
-  (sum of reaction forces must equal the applied load — a mathematical
-  identity for any correct linear solve, ~0.001% error on the reference
-  case) and mesh convergence at two densities — with peak stress reported
-  honestly as not always monotonically convergent (a real FEA stress
-  singularity at the fixed-hole-rim corner, not a bug). See
-  `agents/structures/bracket_mesh.py` and
-  `examples/bracket/structural_analysis.py`.
+  hole_count, applied_force_n, ...)` (v0.7, stress metric fixed in v0.8):
+  real 3D solid FEA on the **actual** `agents/geometry/bracket.py`
+  component, under a bolted-mounting load case (holes fixed, top face
+  loaded). No closed-form solution exists here, so validated by **exact
+  force equilibrium** (sum of reaction forces must equal the applied load
+  — a mathematical identity for any correct linear solve, ~0.001% error on
+  the reference case) and mesh convergence at two densities. Stress is
+  reported two ways: `hotspot_stress_mpa` (mean of the top 1% highest
+  nodal-averaged von Mises values — a standard fatigue/design-code
+  convention for singular locations, and what `mesh_converged` is based
+  on, ~3% convergence) and `raw_peak_stress_mpa` (the single highest
+  value, informational only — does not reliably converge, a real FEA
+  stress singularity at the fixed-hole-rim corner, not a bug). See
+  `agents/structures/bracket_mesh.py`, `agents/structures/frd_utils.py`,
+  and `examples/bracket/structural_analysis.py`.
 
 Requires CalculiX installed separately (`scripts/install_calculix_windows.sh`)
 since `ccx.exe` depends on a large stack of MSYS2 runtime DLLs that can't
@@ -47,4 +51,16 @@ meshing code) rather than feeding gmsh's raw output to `ccx.exe`. A third
 gotcha found in v0.7: shared nodes between a fixed face and a loaded face
 (e.g. a bracket hole's rim, which borders both the fixed hole surface and
 the loaded top face) silently drop their share of applied load from the
-reaction-force balance — excluded from the loaded set once identified.
+reaction-force balance — excluded from the loaded set once identified. A
+fourth found in v0.8: CalculiX's `.frd` nodal-results file is fixed-width
+ASCII, not whitespace-delimited — adjacent values can abut with no
+separating space when a negative sign takes a positive value's leading
+space, so it must be parsed by character position (`frd_utils.py`), not
+`split()`.
+
+`engineering/analysis/bracket_optimizer.py` (v0.8) closes the loop:
+`optimize_bracket_thickness_for_min_mass(...)` finds the thinnest
+(lightest) bracket satisfying a maximum allowable stress, via bounded
+root-finding (`scipy.optimize.brentq`) against `evaluate_bracket` —
+query-efficient by design since each FEA evaluation costs ~1-1.5 minutes.
+See `examples/bracket/optimize.py`.

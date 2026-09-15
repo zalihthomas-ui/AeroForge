@@ -434,12 +434,12 @@ closed-form target.
   duplicated).
 - `examples/bracket/structural_analysis.py` demonstrates the reference
   case: 100×80×5mm bracket, four 8mm holes, 500N top load → 7.09MPa peak
-  stress, 0.0007mm deflection, 0.0008% equilibrium error, converged.
+  stress (raw; see v0.8 for the hotspot-vs-raw split this number became),
+  0.0007mm deflection, 0.0008% equilibrium error, converged.
 
-Explicitly **out of scope**: a finite-element treatment that avoids the
-stress-singularity ambiguity (e.g. a filleted/rounded BC transition, or
-reporting a stress *averaged* over a small region instead of a raw peak
-value) — noted as real future work, not solved here.
+The stress-singularity ambiguity noted here (peak stress not reliably
+convergent) was resolved in v0.8 below — not left as permanent future
+work after all.
 
 ### Closed-loop aerodynamic optimization (Phase 5 MVP)
 
@@ -487,17 +487,126 @@ density convergence check is now the slowest test in the repo, ~1.5min).
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero analysis + optimization | dune |
 
-## Next milestone: v0.8 (not yet scoped)
+## Milestone: v0.8 — bracket stress-singularity fix + geometry optimization (DONE)
 
-Candidates: resolve the bracket's fixed-hole-rim stress singularity
-(e.g. a filleted BC transition, or a defensible stress-averaging
-convention) so peak stress becomes a reportable, converged metric rather
-than "converged if you're lucky with the mesh pair"; extend closed-loop
-optimization to a real geometry parameter that actually varies the
-objective (e.g. optimizing bracket thickness/hole placement for a
-structural objective, now that evaluate_bracket exists, rather than
-optimizing a flight condition); or begin Phase 6 (manufacturing
-intelligence) — CNC/additive manufacturability checks on the actual
-bracket/wing geometry, following the same evaluate-honestly, validate-
-against-something-real approach used for CFD/FEA rather than inventing
-scoring heuristics with no ground truth.
+Two parallel, non-overlapping tracks, both landed 2026-09-15 — both v0.7
+"next milestone" candidates pursued together, same as v0.6→v0.7.
+
+### Bracket stress-singularity resolution
+
+v0.7 found and honestly reported a real problem: peak von Mises stress at
+the bracket's fixed-hole-rim corner didn't converge with mesh refinement
+(a genuine FEA stress singularity), while deflection converged cleanly.
+Two standard techniques were tried, in order of invasiveness:
+
+1. **Nodal-averaged stress** (`*NODE FILE`, extrapolated from Gauss points
+   and averaged across all elements sharing a node) alone — confirmed to
+   help but not fully fix it: still ~12% swings across the same 5-point
+   density sweep used in v0.7.
+2. **Hot-spot stress** (mean of the top 1% highest nodal-averaged von
+   Mises values — a standard fatigue/design-code convention specifically
+   for handling singular locations) layered on top of nodal averaging —
+   converges to within ~3% across the same sweep.
+
+`agents/geometry/bracket.py`'s actual hole geometry was deliberately left
+untouched (a shared component; changing the real mission-doc bracket's
+shape would have been a bigger decision than this task warranted) — this
+fixes how the solved stress field is aggregated into a metric, not the
+mesh or the part.
+
+`BracketStructuralResult` fields renamed for honesty:
+`max_stress_mpa` → `hotspot_stress_mpa` (now drives `mesh_converged`),
+plus a new `raw_peak_stress_mpa` (kept for transparency, explicitly
+documented as not reliably convergent). New
+`agents/structures/frd_utils.py` parses CalculiX's `.frd` nodal-results
+file — fixed-width ASCII, not whitespace-delimited (adjacent values can
+abut with no separating space when a negative sign takes a positive
+value's leading space) — to get nodal-averaged stress, which `.dat`'s
+`*NODE PRINT`/`*EL PRINT` output cannot provide.
+
+Reference case now converges cleanly: `hotspot_stress_mpa`=5.48MPa vs.
+`raw_peak_stress_mpa`=8.38MPa at 100×80×5mm/4×8mm holes/500N,
+`mesh_converged`=True (independently re-verified by chief on main).
+
+### Closed-loop bracket mass optimization
+
+Extends v0.7's optimization pattern to a real geometry parameter (v0.7's
+optimizer only varied a flight condition, alpha — see that section for
+why taper ratio would have been degenerate). Given mission doc's own
+emphasis on minimizing weight subject to structural margins, and that
+`evaluate_bracket` now exists and works: find the **thinnest bracket that
+still satisfies a maximum allowable stress**.
+
+**A real cost-profile design decision, made explicit before coding**:
+each `evaluate_bracket` call costs ~1-1.5 minutes (unlike v0.7's aero
+optimizer, where evaluations are near-instant), so a naive grid search or
+gradient method would burn 20-30+ minutes on redundant evaluations.
+Since the underlying problem — thinner → higher stress, thicker → lower
+stress, find where stress crosses the allowable — is naturally a
+**root-find**, not a general minimization, `scipy.optimize.brentq`
+(bounded, guaranteed convergence given a valid sign-change bracket,
+typically 10-20 evaluations) is the right-sized tool. The monotonicity
+assumption and the sign-change bracket are both verified against real FEA
+at both bounds *before* searching, with clear errors naming exactly which
+assumption failed and how to fix the input bounds if not.
+
+- `engineering/analysis/bracket_optimizer.py` —
+  `optimize_bracket_thickness_for_min_mass(length_mm, width_mm,
+  hole_diameter_mm, hole_count, applied_force_n, max_allowable_stress_mpa,
+  ...) -> BracketOptimizationResult(optimal_thickness_mm, optimal_mass_kg,
+  max_stress_at_optimum_mpa, max_allowable_stress_mpa, evaluations)`.
+  Evaluations are cached (by rounded thickness) to avoid redundant solves
+  if brentq re-probes a nearby point.
+- **A real coordination hazard caught and fixed mid-flight**: this task's
+  work was accidentally created directly in the shared working directory
+  instead of its own git worktree (the exact mistake fixed at this
+  project's very start) — caught before any commit happened, no work
+  lost; files were moved into the correct worktree and a proper branch
+  re-created from current main. A reminder that this discipline needs
+  re-enforcing periodically, not just set up once.
+- **A real cross-branch timing collision, also caught and fixed**: this
+  task's code was written against the pre-v0.8 field name
+  (`max_stress_mpa`) while the stress-singularity fix (renaming it to
+  `hotspot_stress_mpa`) landed on main concurrently on a different branch.
+  Chief updated the affected files, independently re-ran both the fast
+  (mocked) and real-FEA tests to confirm correctness, before handing back
+  for review — a real example of why treating a sibling agent's
+  in-progress API as provisional (not final) matters even when told to
+  treat it as a "stable black box."
+- Verified end-to-end on the reference bracket (100×80mm, 4×8mm holes,
+  500N load, 6.50MPa allowable): converges to 5.55mm thickness, 6.53MPa
+  hotspot stress (+0.4% from target) in 10 real FEA evaluations
+  (~9-10 minutes wall clock), independently confirmed by chief before
+  merge.
+- `examples/bracket/optimize.py` demonstrates the full run with an
+  evaluation-history table.
+
+Explicitly **out of scope**: optimizing multiple geometry parameters at
+once (e.g. thickness + hole placement together — a genuinely harder
+multi-dimensional problem needing a different algorithm than 1D
+root-finding), and any manufacturability constraint on the resulting
+thin-wall thickness (that's Phase 6).
+
+151/151 tests passing across both tracks combined (two real-FEA tests now
+in the suite — the bracket convergence check and the bracket optimizer's
+real-CalculiX test — together push a full local run to ~12 minutes).
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero/bracket analysis + optimization | dune |
+
+## Next milestone: v0.9 (not yet scoped)
+
+Candidates: Phase 6 (manufacturing intelligence) — CNC/additive
+manufacturability checks on the actual bracket/wing geometry, following
+the same evaluate-honestly, validate-against-something-real approach used
+for CFD/FEA rather than inventing scoring heuristics with no ground
+truth; multi-parameter bracket optimization (thickness + hole placement
+together, needing a proper multi-dimensional method rather than 1D
+root-finding); or resolving the wing's remaining approximations (no
+twist/washout, aero not yet coupled to the actual airfoil solid) toward a
+fuller flagship UAV wing demonstration (mission doc §20).

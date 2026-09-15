@@ -24,7 +24,7 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). Working today (v0.7):
+time (see `docs/architecture/roadmap.md`). Working today (v0.8):
 
 ```text
 Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / STL
@@ -45,13 +45,18 @@ the actual CAD geometry:
   finds the best airfoil/angle-of-attack combination for max L/D via a
   real `scipy` optimizer.
 - **Structures Agent** (`examples/beam/`, `examples/plate_with_hole/`,
-  `examples/bracket/structural_analysis.py`): real **CalculiX** FEA — a
-  parametric cantilever beam (validated against Euler-Bernoulli theory,
-  ~0.3% error), a meshed 3D solid plate-with-hole (gmsh + C3D10 tets,
-  validated against Kirsch's classical solution, ~0.4% error), and now
-  the **actual bracket geometry** under a real bolted-mounting load,
-  validated by exact force equilibrium (~0.001% error) and mesh
-  convergence since no closed-form solution exists for that case.
+  `examples/bracket/structural_analysis.py`, `examples/bracket/optimize.py`):
+  real **CalculiX** FEA — a parametric cantilever beam (validated against
+  Euler-Bernoulli theory, ~0.3% error), a meshed 3D solid plate-with-hole
+  (gmsh + C3D10 tets, validated against Kirsch's classical solution,
+  ~0.4% error), and the **actual bracket geometry** under a real
+  bolted-mounting load, validated by exact force equilibrium (~0.001%
+  error) and mesh convergence — including a resolved stress-concentration
+  singularity (hot-spot stress convention, ~3% convergence) since no
+  closed-form solution exists for that case. Closed-loop optimization
+  (`engineering/analysis/bracket_optimizer.py`) finds the minimum-mass
+  bracket thickness satisfying a stress constraint via bounded
+  root-finding against real FEA.
 
 Manufacturing analysis and the frontend dashboard are real, unimplemented
 future phases — not stubbed out as if they worked. Do not assume they
@@ -94,6 +99,7 @@ python examples/plate_with_hole/run.py
 python examples/wing/aero_summary.py
 python examples/wing/optimize.py
 python examples/bracket/structural_analysis.py
+python examples/bracket/optimize.py    # slow: real closed-loop FEA optimization, ~10 min
 ```
 
 ## Contributing
