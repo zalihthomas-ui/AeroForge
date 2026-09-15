@@ -6,6 +6,13 @@ case) — see agents/structures/agent.py and bracket_mesh.py's module
 docstrings for the full writeup, including the convergence sweep this
 was picked from.
 
+The fixed-hole-rim edge is a classic FEA stress-singularity location
+(v0.7 finding): raw peak stress alone doesn't reliably converge with
+mesh refinement, so `hotspot_stress_mpa` (mean of the top 1% highest
+nodal-averaged von Mises values — a standard fatigue/design-code
+convention) is the convergence-checked metric instead; `raw_peak_stress_mpa`
+is kept for transparency but is informational only.
+
 Skipped entirely when ccx.exe isn't installed, same as the other
 structures tests. These are the slowest tests in the suite (two full
 solid-FEA solves per evaluate_bracket() call, for the convergence check).
@@ -29,8 +36,11 @@ pytestmark = pytest.mark.skipif(
 
 # Mission doc's reference bracket (100x80x5mm, four 8mm holes) under a
 # moderate top-face load. Observed during development: mesh_converged=True
-# (~0.8% deflection change, ~3% stress change), equilibrium_error_pct
-# ~0.001%.
+# (~0.4% deflection change, ~0.4% hotspot_stress change), equilibrium_error_pct
+# ~0.001%. Raw peak stress alone changed ~1.6% between these same two
+# densities — well converged here, but not reliably so across the wider
+# sweep in bracket_mesh.py's module docstring, which is why
+# hotspot_stress_mpa (not raw_peak_stress_mpa) drives mesh_converged.
 REFERENCE_CASE = dict(
     length_mm=100.0, width_mm=80.0, thickness_mm=5.0, hole_diameter_mm=8.0, hole_count=4, applied_force_n=500.0
 )
@@ -54,14 +64,18 @@ def test_reference_bracket_converges_with_exact_equilibrium(agent: StructuresAge
     assert isinstance(result, BracketStructuralResult)
     assert result.equilibrium_error_pct < 1.0
     assert result.mesh_converged is True
-    assert result.max_stress_mpa > 0
+    assert result.hotspot_stress_mpa > 0
+    assert result.raw_peak_stress_mpa > 0
     assert result.max_deflection_mm > 0
-    assert result.fine_mesh_max_stress_mpa == result.max_stress_mpa
-    # Both densities resolve the same physical peak; they need not be
-    # identical, just close (mesh_converged already asserts this above) —
-    # this just checks they aren't trivially equal (e.g. a bug reusing one
-    # mesh's result for both fields).
-    assert result.coarse_mesh_max_stress_mpa != result.fine_mesh_max_stress_mpa
+    assert result.fine_mesh_hotspot_stress_mpa == result.hotspot_stress_mpa
+    # Both densities resolve the same physical hot-spot stress; they need
+    # not be identical, just close (mesh_converged already asserts this
+    # above) — this just checks they aren't trivially equal (e.g. a bug
+    # reusing one mesh's result for both fields).
+    assert result.coarse_mesh_hotspot_stress_mpa != result.fine_mesh_hotspot_stress_mpa
+    # raw_peak_stress_mpa is the single highest nodal value; hotspot_stress_mpa
+    # is a mean over the top 1% of nodes, so the peak must be >= the mean.
+    assert result.raw_peak_stress_mpa >= result.hotspot_stress_mpa
 
 
 @pytest.mark.parametrize(
