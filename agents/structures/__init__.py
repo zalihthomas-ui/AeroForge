@@ -7,6 +7,7 @@ from agents.structures.agent import (
     StructuralResult,
     StructuresAgent,
     StructuresEvaluationError,
+    WingStructuralResult,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "StructuralResult",
     "StructuresAgent",
     "StructuresEvaluationError",
+    "WingStructuralResult",
 ]

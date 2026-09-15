@@ -40,6 +40,40 @@ subprocess, the same way agents/aerodynamics drives real XFOIL:
   5-point density sweep where raw peak stress alone varied up to ~12%
   between adjacent densities — see agents/structures/bracket_mesh.py's
   module docstring for the full sweep data.
+- `evaluate_wing`: real 3D solid FEA on the ACTUAL Geometry Agent wing
+  component (agents/geometry/wing.py's `build_wing` — real NACA airfoil
+  cross-sections, not a flat-plate approximation), loaded by its own
+  computed lift (`engineering.analysis.wing_aero.evaluate_wing_aero`) —
+  the first time an aerodynamic result drives a structural load in this
+  project rather than a hand-picked force. See
+  agents/structures/wing_mesh.py's module docstring for two real
+  technical findings this surfaced: (1) a real airfoil's trailing edge
+  (~0.25% of chord thick) needs curvature-adaptive meshing, not the
+  bracket/plate's uniform-with-local-refinement approach, which produced
+  negative-volume sliver elements right at the TE; (2) build_wing mirrors
+  both wing halves into one fused solid with no face at the root (y=0) to
+  apply a boundary condition to, so this meshes a half-wing (cut from the
+  actual full-wing Part with a half-space boolean, verified to have
+  exactly half the volume) instead.
+
+  Boundary condition: a genuine symmetry-plane BC at the root (UY=0
+  across the whole root face) rather than full fixity — chosen because
+  the wing is a physically continuous structure through y=0 under
+  symmetric loading, so rigidly clamping all 3 DOF there would be wrong
+  (it would block the cross-section's natural in-plane elastic
+  deformation, artificially over-stiffening the result), unlike the
+  bracket's holes which really are bolted (rigid) connections. Load: the
+  total lift is halved (this model is half the wing) and distributed
+  evenly across the top-surface nodes (identified by outward normal
+  Z-component, since the real airfoil loft has ~80 narrow BSPLINE strip
+  faces, not one flat top face) — a uniform first-order approximation of
+  the real, roughly elliptical spanwise lift distribution, documented as
+  such. Same stress-singularity situation as the bracket (a sharp corner
+  at the root cross-section perimeter), addressed with the same
+  hotspot_stress_mpa/raw_peak_stress_mpa convention. Material is a
+  configurable isotropic default (aluminum 6061: E~68900 MPa, nu~0.33,
+  yield~276 MPa) — documented as a simplification, since a real small UAV
+  wing might use foam-core composite construction instead.
 
 Critical gotcha (see vendor/calculix/README.md): this MSYS2 build of
 CalculiX (2.23) hangs indefinitely on this machine when its default sparse
@@ -62,13 +96,18 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 
-from agents.geometry.validation import GeometryValidationError, validate_bracket_parameters
+from agents.aerodynamics.agent import AerodynamicsEvaluationError
+from agents.geometry.validation import GeometryValidationError, validate_bracket_parameters, validate_wing_parameters
 from agents.geometry.bracket import build_bracket
+from agents.geometry.wing import DEFAULT_PARAMETERS as WING_DEFAULT_PARAMETERS
+from agents.geometry.wing import build_wing
 from agents.structures.bracket_mesh import BracketMesh, mesh_bracket
 from agents.structures.frd_utils import parse_frd_nodal_block
 from agents.structures.inp_utils import format_nset_lines
 from agents.structures.plate_with_hole import PlateMesh, build_plate_with_hole, mesh_plate_with_hole
+from agents.structures.wing_mesh import WingMesh, build_half_wing, mesh_half_wing
 from cad.exporters import export_step
+from engineering.requirements.schema import EngineeringSpec
 
 _DEFAULT_CCX_PATH = r"C:\msys64\mingw64\bin\ccx.exe"
 _BEAM_CCX_TIMEOUT_S = 30
@@ -114,6 +153,25 @@ _MESH_CONVERGENCE_TOLERANCE_PCT = 10.0
 # fraction tried and gave the tightest convergence in the density sweep —
 # see bracket_mesh.py's module docstring.
 _HOTSPOT_TOP_FRACTION = 0.01
+
+_WING_CCX_TIMEOUT_S = 180
+_WING_JOBNAME = "wing"
+
+# The two mesh densities compared for evaluate_wing's convergence check
+# (see agents/structures/wing_mesh.py's mesh_half_wing `density_factor` —
+# smaller means finer). Picked from a 4-point sweep (2.0/1.0/0.6/0.4) where
+# deflection and hotspot_stress both converged to well under 1% by this
+# pair (raw peak stress did not, same as the bracket) — see
+# wing_mesh.py's module docstring.
+_WING_COARSE_DENSITY_FACTOR = 1.0
+_WING_FINE_DENSITY_FACTOR = 0.6
+
+# Aluminum 6061-T6, a well-documented isotropic default — NOT necessarily
+# the real material of a small UAV wing (often foam-core composite), but
+# a reasonable, easy-to-verify first pass. All overridable.
+DEFAULT_WING_YOUNGS_MODULUS_MPA = 68900.0
+DEFAULT_WING_POISSONS_RATIO = 0.33
+DEFAULT_WING_ALLOWABLE_STRESS_MPA = 276.0
 
 
 class StructuresEvaluationError(Exception):
@@ -163,6 +221,24 @@ class BracketStructuralResult:
     hotspot_stress_mpa: float
     raw_peak_stress_mpa: float
     max_deflection_mm: float
+    equilibrium_error_pct: float
+    mesh_converged: bool
+    coarse_mesh_hotspot_stress_mpa: float
+    fine_mesh_hotspot_stress_mpa: float
+
+
+@dataclass
+class WingStructuralResult:
+    """Result of a wing FEA evaluation under its own computed lift,
+    symmetry-plane-constrained at the root, validated via force
+    equilibrium and mesh convergence rather than a closed-form solution.
+    Same hotspot/raw-peak stress convention as BracketStructuralResult —
+    see this module's docstring for why."""
+
+    hotspot_stress_mpa: float
+    raw_peak_stress_mpa: float
+    max_deflection_mm: float
+    safety_factor: float
     equilibrium_error_pct: float
     mesh_converged: bool
     coarse_mesh_hotspot_stress_mpa: float
@@ -672,6 +748,245 @@ class StructuresAgent:
                 # this module's docstring on why raw *EL PRINT Gauss-point
                 # stress alone doesn't converge near the fixed-hole-rim
                 # singularity.
+                "*NODE FILE",
+                "S",
+                "*END STEP",
+                "",
+            ]
+        )
+
+    def evaluate_wing(
+        self,
+        wing_spec: EngineeringSpec,
+        cruise_velocity_mps: float = 25.0,
+        alpha_deg: float = 4.0,
+        backend: str = "neuralfoil",
+        youngs_modulus_mpa: float = DEFAULT_WING_YOUNGS_MODULUS_MPA,
+        poissons_ratio: float = DEFAULT_WING_POISSONS_RATIO,
+        allowable_stress_mpa: float = DEFAULT_WING_ALLOWABLE_STRESS_MPA,
+    ) -> WingStructuralResult:
+        """Evaluate the actual Geometry Agent wing component
+        (agents/geometry/wing.py's `build_wing`) under its own computed
+        lift: symmetry-plane-constrained at the root, transversely loaded
+        by lift distributed across the top surface.
+
+        The load comes from `engineering.analysis.wing_aero.evaluate_wing_aero`
+        — a real aerodynamic result, not a hand-picked force. Half the
+        total lift is applied here since this meshes and solves only half
+        the wing (see agents/structures/wing_mesh.py's module docstring
+        for why: build_wing's mirrored/fused solid has no face at the
+        root to apply a boundary condition to).
+
+        No closed-form solution exists for this geometry, so it's
+        validated the same two ways as evaluate_bracket: exact force
+        equilibrium (primary) and mesh convergence on `hotspot_stress_mpa`
+        (secondary) — see this module's docstring for why raw peak stress
+        alone doesn't reliably converge here either.
+
+        Args:
+            wing_spec: EngineeringSpec with component == "wing" (same
+                parameters as agents/geometry/wing.py's build_wing:
+                wing_span, root_chord, tip_chord, sweep, dihedral,
+                naca_airfoil — validated with the same
+                agents/geometry/validation.validate_wing_parameters).
+            cruise_velocity_mps, alpha_deg, backend: Passed through to
+                evaluate_wing_aero to compute the lift load.
+            youngs_modulus_mpa, poissons_ratio: Isotropic material
+                properties. Default to aluminum 6061 — a documented
+                simplification (see this module's docstring), not
+                necessarily the real material. Must be positive.
+            allowable_stress_mpa: Material allowable stress (MPa), used
+                only to compute `safety_factor`. Must be positive.
+
+        Returns:
+            WingStructuralResult with the fine-mesh hot-spot/raw-peak
+            stress and deflection, safety factor, the equilibrium check,
+            and the convergence check.
+
+        Raises:
+            StructuresEvaluationError: If the spec/inputs are invalid,
+                the aerodynamic lift can't be computed, ccx.exe cannot be
+                located, meshing/solving fails or times out, or the
+                output can't be parsed.
+        """
+        if wing_spec.component != "wing":
+            raise StructuresEvaluationError(
+                f"evaluate_wing requires an EngineeringSpec with component='wing', got '{wing_spec.component}'."
+            )
+
+        params = {**WING_DEFAULT_PARAMETERS, **wing_spec.parameters}
+        wing_span = params["wing_span"]
+        root_chord = params["root_chord"]
+        tip_chord = params["tip_chord"]
+        sweep = params["sweep"]
+        dihedral = params["dihedral"]
+        naca_airfoil = params.get("naca_airfoil", 12.0)
+
+        try:
+            validate_wing_parameters(wing_span, root_chord, tip_chord, sweep, dihedral)
+        except GeometryValidationError as exc:
+            raise StructuresEvaluationError(str(exc)) from exc
+
+        for name, value in (
+            ("youngs_modulus_mpa", youngs_modulus_mpa),
+            ("allowable_stress_mpa", allowable_stress_mpa),
+        ):
+            if value <= 0:
+                raise StructuresEvaluationError(f"'{name}' must be strictly positive, got {value}.")
+
+        # Imported lazily: engineering.analysis's package __init__ imports
+        # bracket_optimizer, which imports this module (agent.py) — a
+        # module-level import here would be circular.
+        from engineering.analysis.wing_aero import evaluate_wing_aero
+
+        # evaluate_wing_aero reads directly from spec.parameters with no
+        # default fallback, unlike build_wing — pass it the merged params
+        # so an under-specified spec still resolves the same defaults.
+        resolved_spec = EngineeringSpec(component="wing", parameters=params, metadata=wing_spec.metadata)
+
+        try:
+            aero = evaluate_wing_aero(
+                resolved_spec, cruise_velocity_mps=cruise_velocity_mps, alpha_deg=alpha_deg, backend=backend
+            )
+        except AerodynamicsEvaluationError as exc:
+            raise StructuresEvaluationError(f"Could not compute the wing's aerodynamic lift: {exc}") from exc
+
+        # This model is half the wing (see the module docstring), so it
+        # carries half the total lift.
+        lift_n_half = aero.lift_n / 2
+
+        ccx_path = _find_ccx_path()
+        if ccx_path is None:
+            raise StructuresEvaluationError(
+                "ccx.exe (CalculiX) not found on PATH or at the default MSYS2 "
+                f"install location ({_DEFAULT_CCX_PATH}). Install it via "
+                "scripts/install_calculix_windows.sh — see vendor/calculix/README.md."
+            )
+
+        coarse_hotspot, _coarse_raw_peak, coarse_max_defl, _ = self._solve_wing(
+            ccx_path, wing_span, root_chord, tip_chord, sweep, dihedral, naca_airfoil,
+            lift_n_half, youngs_modulus_mpa, poissons_ratio, _WING_COARSE_DENSITY_FACTOR, "coarse",
+        )
+        fine_hotspot, fine_raw_peak, fine_max_defl, equilibrium_error_pct = self._solve_wing(
+            ccx_path, wing_span, root_chord, tip_chord, sweep, dihedral, naca_airfoil,
+            lift_n_half, youngs_modulus_mpa, poissons_ratio, _WING_FINE_DENSITY_FACTOR, "fine",
+        )
+
+        stress_change_pct = abs(fine_hotspot - coarse_hotspot) / fine_hotspot * 100
+        defl_change_pct = abs(fine_max_defl - coarse_max_defl) / fine_max_defl * 100
+        mesh_converged = (
+            stress_change_pct < _MESH_CONVERGENCE_TOLERANCE_PCT
+            and defl_change_pct < _MESH_CONVERGENCE_TOLERANCE_PCT
+        )
+
+        return WingStructuralResult(
+            hotspot_stress_mpa=fine_hotspot,
+            raw_peak_stress_mpa=fine_raw_peak,
+            max_deflection_mm=fine_max_defl,
+            safety_factor=allowable_stress_mpa / fine_hotspot,
+            equilibrium_error_pct=equilibrium_error_pct,
+            mesh_converged=mesh_converged,
+            coarse_mesh_hotspot_stress_mpa=coarse_hotspot,
+            fine_mesh_hotspot_stress_mpa=fine_hotspot,
+        )
+
+    def _solve_wing(
+        self,
+        ccx_path: str,
+        wing_span: float,
+        root_chord: float,
+        tip_chord: float,
+        sweep: float,
+        dihedral: float,
+        naca_airfoil: float,
+        lift_n_half: float,
+        youngs_modulus_mpa: float,
+        poissons_ratio: float,
+        density_factor: float,
+        tag: str,
+    ) -> tuple[float, float, float, float]:
+        """Mesh, solve, and parse one wing density. Returns
+        (hotspot_stress_mpa, raw_peak_stress_mpa, max_deflection_mm,
+        equilibrium_error_pct)."""
+        jobname = f"{_WING_JOBNAME}_{tag}"
+        with tempfile.TemporaryDirectory(prefix=f"aeroforge_ccx_wing_{tag}_") as work_dir:
+            step_path = os.path.join(work_dir, f"{jobname}.step")
+            wing_part = build_wing(
+                {
+                    "wing_span": wing_span,
+                    "root_chord": root_chord,
+                    "tip_chord": tip_chord,
+                    "sweep": sweep,
+                    "dihedral": dihedral,
+                    "naca_airfoil": naca_airfoil,
+                }
+            )
+            half_span = wing_span / 2
+            half_wing = build_half_wing(wing_part, half_span, root_chord)
+            export_step(half_wing, step_path)
+
+            mesh = mesh_half_wing(step_path, half_span, root_chord, density_factor)
+
+            inp_path = os.path.join(work_dir, f"{jobname}.inp")
+            with open(inp_path, "w", encoding="ascii") as f:
+                f.write(self._build_wing_input_deck(mesh, youngs_modulus_mpa, poissons_ratio, lift_n_half))
+
+            self._run_ccx(ccx_path, work_dir, jobname=jobname, timeout=_WING_CCX_TIMEOUT_S)
+
+            dat_text = self._read_dat_file(work_dir, jobname)
+            frd_path = os.path.join(work_dir, f"{jobname}.frd")
+            hotspot_stress_mpa, raw_peak_stress_mpa = self._compute_hotspot_stress(frd_path, jobname=jobname)
+
+        max_deflection_mm = self._parse_max_displacement_magnitude(dat_text, jobname=jobname)
+        reaction_force_z = self._parse_reaction_force_sum(dat_text, direction_index=3, jobname=jobname)
+        equilibrium_error_pct = abs(reaction_force_z - (-lift_n_half)) / lift_n_half * 100
+
+        return hotspot_stress_mpa, raw_peak_stress_mpa, max_deflection_mm, equilibrium_error_pct
+
+    def _build_wing_input_deck(
+        self,
+        mesh: WingMesh,
+        youngs_modulus_mpa: float,
+        poissons_ratio: float,
+        lift_n_half: float,
+    ) -> str:
+        force_per_node_n = lift_n_half / len(mesh.top_surface_node_ids)
+
+        # Symmetry-plane BC (UY=0 across the whole root face), not full
+        # fixity — see this module's docstring for why. Same minimal
+        # rigid-body-motion constraints as plate_with_hole.py's pattern:
+        # one node's X/Z, a second node's Z.
+        boundary_lines = [f"{node_id}, 2, 2" for node_id in mesh.root_node_ids]
+        boundary_lines.append(f"{mesh.center_node_id}, 1, 1")
+        boundary_lines.append(f"{mesh.center_node_id}, 3, 3")
+        boundary_lines.append(f"{mesh.offset_node_id}, 3, 3")
+
+        cload_lines = [f"{node_id}, 3, {force_per_node_n:.6f}" for node_id in mesh.top_surface_node_ids]
+
+        return "\n".join(
+            [
+                "*NODE",
+                *mesh.node_lines,
+                "*NSET, NSET=NALL, GENERATE",
+                f"1, {mesh.max_node_id}, 1",
+                "*NSET, NSET=ROOT",
+                *format_nset_lines(mesh.root_node_ids),
+                "*ELEMENT, TYPE=C3D10, ELSET=VOL",
+                *mesh.element_lines,
+                "*SOLID SECTION, ELSET=VOL, MATERIAL=ALU",
+                "*MATERIAL, NAME=ALU",
+                "*ELASTIC",
+                f"{youngs_modulus_mpa:.6f}, {poissons_ratio:.6f}",
+                "*BOUNDARY",
+                *boundary_lines,
+                "*STEP",
+                "*STATIC, SOLVER=SPOOLES",
+                "*CLOAD",
+                *cload_lines,
+                "*NODE PRINT, NSET=NALL",
+                "U",
+                "*NODE PRINT, NSET=ROOT",
+                "RF",
                 "*NODE FILE",
                 "S",
                 "*END STEP",
