@@ -239,12 +239,12 @@ def find_passing_wing_design(
         backend=backend,
         structures_agent=agent,
     )
-    iterations.append(initial_res)
-
     if initial_res.overall_status == "PASS":
-        # Already passing
-        initial_res.iterations = iterations
+        # Already passing on first try — no sizing iterations needed
+        initial_res.iterations = []
         return initial_res
+
+    iterations.append(initial_res)
 
     # 2. Setup root finding over chord scale factor k
     k_min, k_max = float(chord_scale_bounds[0]), float(chord_scale_bounds[1])
