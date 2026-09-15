@@ -12,6 +12,11 @@ from engineering.analysis.wing_aero import (
     WingAeroSummary,
     evaluate_wing_aero,
 )
+from engineering.analysis.wing_materializer import (
+    MaterializedWingResult,
+    WingMaterializerError,
+    materialize_optimal_wing,
+)
 from engineering.analysis.wing_optimizer import (
     AirfoilCandidateResult,
     WingOptimizationResult,
@@ -23,11 +28,14 @@ __all__ = [
     "BracketDesignPoint",
     "BracketOptimizationResult",
     "BracketOptimizerError",
+    "MaterializedWingResult",
     "WingAeroError",
     "WingAeroSummary",
+    "WingMaterializerError",
     "WingOptimizationResult",
     "calculate_bracket_mass",
     "evaluate_wing_aero",
+    "materialize_optimal_wing",
     "optimize_bracket_thickness_for_min_mass",
     "optimize_wing_for_max_l_over_d",
 ]
