@@ -21,14 +21,25 @@ subprocess, the same way agents/aerodynamics drives real XFOIL:
   reaction forces at the fixed nodes must equal the applied load, a
   mathematical identity for any correctly converged linear static solve,
   regardless of geometry complexity (observed: ~0.001-0.08% error); and
-  (2) mesh convergence — solved at two mesh densities, max stress and max
-  deflection compared between them (observed on the reference case:
-  ~0.8% deflection change, ~3% stress change between the shipped
-  densities — see agents/structures/bracket_mesh.py's module docstring
-  for the convergence sweep this was picked from, including a real,
-  reported peak-stress non-monotonicity at coarser densities consistent
-  with the fixed-hole-rim edge being a classic FEA stress-singularity
-  location, not fully eliminated by 2 mesh points).
+  (2) mesh convergence on a "hot-spot" stress metric — see below.
+
+  Stress singularity: the sharp corner where each hole's fixed
+  cylindrical face meets the loaded top face is a classic FEA
+  stress-singularity location (the true continuum stress there is
+  unbounded, so raw peak stress has no mesh-independent limit — a v0.7
+  finding, reported honestly rather than papered over). Two standard,
+  non-mesh-changing mitigations, applied together: (a) nodal-averaged
+  stress via CalculiX's `*NODE FILE` (extrapolated from Gauss points and
+  averaged across all elements sharing a node — smooths local noise, but
+  alone still doesn't converge the raw peak, which is reported
+  separately as `raw_peak_stress_mpa`, informational only); (b) a
+  "hot-spot" stress — the mean of the top `_HOTSPOT_TOP_FRACTION` highest
+  nodal-averaged values (a standard fatigue/design-code convention for
+  singular locations) — reported as `hotspot_stress_mpa` and used for the
+  convergence check. Combining both converged to within ~3% across a
+  5-point density sweep where raw peak stress alone varied up to ~12%
+  between adjacent densities — see agents/structures/bracket_mesh.py's
+  module docstring for the full sweep data.
 
 Critical gotcha (see vendor/calculix/README.md): this MSYS2 build of
 CalculiX (2.23) hangs indefinitely on this machine when its default sparse
@@ -54,6 +65,7 @@ from dataclasses import dataclass
 from agents.geometry.validation import GeometryValidationError, validate_bracket_parameters
 from agents.geometry.bracket import build_bracket
 from agents.structures.bracket_mesh import BracketMesh, mesh_bracket
+from agents.structures.frd_utils import parse_frd_nodal_block
 from agents.structures.inp_utils import format_nset_lines
 from agents.structures.plate_with_hole import PlateMesh, build_plate_with_hole, mesh_plate_with_hole
 from cad.exporters import export_step
@@ -90,10 +102,18 @@ _BRACKET_JOBNAME = "bracket"
 _BRACKET_COARSE_DENSITY_FACTOR = 1.0
 _BRACKET_FINE_DENSITY_FACTOR = 0.9
 
-# How much max_stress/max_deflection may differ between the coarse and fine
-# meshes to be considered converged — standard FEA verification practice
-# when no closed-form answer exists to validate against directly.
+# How much hotspot_stress/max_deflection may differ between the coarse and
+# fine meshes to be considered converged — standard FEA verification
+# practice when no closed-form answer exists to validate against directly.
 _MESH_CONVERGENCE_TOLERANCE_PCT = 10.0
+
+# The "hot-spot" stress is the mean of the top X% highest nodal-averaged
+# von Mises values, a standard fatigue/design-code way of reporting a
+# stress near a singular location without relying on the (mesh-dependent,
+# unbounded-in-the-limit) single raw peak value. 1% was the smallest
+# fraction tried and gave the tightest convergence in the density sweep —
+# see bracket_mesh.py's module docstring.
+_HOTSPOT_TOP_FRACTION = 0.01
 
 
 class StructuresEvaluationError(Exception):
@@ -128,14 +148,25 @@ class PlateWithHoleResult:
 class BracketStructuralResult:
     """Result of a mounting-bracket FEA evaluation (bolted at all 4 holes,
     transversely loaded on the top face), validated via force equilibrium
-    and mesh convergence rather than a closed-form solution."""
+    and mesh convergence rather than a closed-form solution.
 
-    max_stress_mpa: float
+    The fixed-hole-rim edge is a classic FEA stress-singularity location
+    (see agents/structures/agent.py's module docstring), so stress is
+    reported two ways: `hotspot_stress_mpa` — the mean of the top 1%
+    highest nodal-averaged von Mises values, a standard fatigue/design-
+    code convention for singular locations, and the metric the mesh
+    convergence check is based on — and `raw_peak_stress_mpa`, the single
+    highest nodal-averaged value, kept for transparency but informational
+    only: it does NOT reliably converge with mesh refinement.
+    """
+
+    hotspot_stress_mpa: float
+    raw_peak_stress_mpa: float
     max_deflection_mm: float
     equilibrium_error_pct: float
     mesh_converged: bool
-    coarse_mesh_max_stress_mpa: float
-    fine_mesh_max_stress_mpa: float
+    coarse_mesh_hotspot_stress_mpa: float
+    fine_mesh_hotspot_stress_mpa: float
 
 
 def _find_ccx_path() -> str | None:
@@ -425,12 +456,13 @@ class StructuresAgent:
           mathematical identity for any correctly converged linear static
           solve, regardless of geometry complexity.
         - Mesh convergence (secondary check): solved at two mesh
-          densities; `mesh_converged` is True only if both max stress and
-          max deflection change by less than
-          `_MESH_CONVERGENCE_TOLERANCE_PCT` between them. See
-          agents/structures/bracket_mesh.py's module docstring for why
-          this doesn't always converge (a likely stress singularity at
-          the fixed-hole-rim edge) and isn't forced to.
+          densities; `mesh_converged` is True only if both
+          `hotspot_stress_mpa` and max deflection change by less than
+          `_MESH_CONVERGENCE_TOLERANCE_PCT` between them. See this
+          module's docstring and agents/structures/bracket_mesh.py's for
+          why raw peak stress alone doesn't reliably converge here (a
+          stress singularity at the fixed-hole-rim edge) and how
+          `hotspot_stress_mpa` addresses that without forcing the result.
 
         Args:
             length_mm, width_mm, thickness_mm, hole_diameter_mm,
@@ -444,8 +476,9 @@ class StructuresAgent:
             poissons_ratio: Poisson's ratio.
 
         Returns:
-            BracketStructuralResult with the fine-mesh max stress/
-            deflection, the equilibrium check, and the convergence check.
+            BracketStructuralResult with the fine-mesh hot-spot/raw-peak
+            stress and deflection, the equilibrium check, and the
+            convergence check.
 
         Raises:
             StructuresEvaluationError: If inputs are invalid, ccx.exe
@@ -464,16 +497,16 @@ class StructuresAgent:
                 "scripts/install_calculix_windows.sh — see vendor/calculix/README.md."
             )
 
-        coarse_max_stress, coarse_max_defl, _ = self._solve_bracket(
+        coarse_hotspot, _coarse_raw_peak, coarse_max_defl, _ = self._solve_bracket(
             ccx_path, length_mm, width_mm, thickness_mm, hole_diameter_mm, hole_count,
             applied_force_n, youngs_modulus_mpa, poissons_ratio, _BRACKET_COARSE_DENSITY_FACTOR, "coarse",
         )
-        fine_max_stress, fine_max_defl, equilibrium_error_pct = self._solve_bracket(
+        fine_hotspot, fine_raw_peak, fine_max_defl, equilibrium_error_pct = self._solve_bracket(
             ccx_path, length_mm, width_mm, thickness_mm, hole_diameter_mm, hole_count,
             applied_force_n, youngs_modulus_mpa, poissons_ratio, _BRACKET_FINE_DENSITY_FACTOR, "fine",
         )
 
-        stress_change_pct = abs(fine_max_stress - coarse_max_stress) / fine_max_stress * 100
+        stress_change_pct = abs(fine_hotspot - coarse_hotspot) / fine_hotspot * 100
         defl_change_pct = abs(fine_max_defl - coarse_max_defl) / fine_max_defl * 100
         mesh_converged = (
             stress_change_pct < _MESH_CONVERGENCE_TOLERANCE_PCT
@@ -481,12 +514,13 @@ class StructuresAgent:
         )
 
         return BracketStructuralResult(
-            max_stress_mpa=fine_max_stress,
+            hotspot_stress_mpa=fine_hotspot,
+            raw_peak_stress_mpa=fine_raw_peak,
             max_deflection_mm=fine_max_defl,
             equilibrium_error_pct=equilibrium_error_pct,
             mesh_converged=mesh_converged,
-            coarse_mesh_max_stress_mpa=coarse_max_stress,
-            fine_mesh_max_stress_mpa=fine_max_stress,
+            coarse_mesh_hotspot_stress_mpa=coarse_hotspot,
+            fine_mesh_hotspot_stress_mpa=fine_hotspot,
         )
 
     def _solve_bracket(
@@ -502,9 +536,10 @@ class StructuresAgent:
         poissons_ratio: float,
         density_factor: float,
         tag: str,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, float]:
         """Mesh, solve, and parse one bracket density. Returns
-        (max_von_mises_stress_mpa, max_deflection_mm, equilibrium_error_pct)."""
+        (hotspot_stress_mpa, raw_peak_stress_mpa, max_deflection_mm,
+        equilibrium_error_pct)."""
         jobname = f"{_BRACKET_JOBNAME}_{tag}"
         with tempfile.TemporaryDirectory(prefix=f"aeroforge_ccx_bracket_{tag}_") as work_dir:
             step_path = os.path.join(work_dir, f"{jobname}.step")
@@ -530,13 +565,45 @@ class StructuresAgent:
             self._run_ccx(ccx_path, work_dir, jobname=jobname, timeout=_BRACKET_CCX_TIMEOUT_S)
 
             dat_text = self._read_dat_file(work_dir, jobname)
+            frd_path = os.path.join(work_dir, f"{jobname}.frd")
+            hotspot_stress_mpa, raw_peak_stress_mpa = self._compute_hotspot_stress(frd_path, jobname=jobname)
 
         max_deflection_mm = self._parse_max_displacement_magnitude(dat_text, jobname=jobname)
-        max_stress_mpa = self._parse_max_von_mises(dat_text, jobname=jobname)
         reaction_force_z = self._parse_reaction_force_sum(dat_text, direction_index=3, jobname=jobname)
         equilibrium_error_pct = abs(reaction_force_z - applied_force_n) / applied_force_n * 100
 
-        return max_stress_mpa, max_deflection_mm, equilibrium_error_pct
+        return hotspot_stress_mpa, raw_peak_stress_mpa, max_deflection_mm, equilibrium_error_pct
+
+    def _compute_hotspot_stress(self, frd_path: str, *, jobname: str) -> tuple[float, float]:
+        """Returns (hotspot_stress_mpa, raw_peak_stress_mpa) from a
+        `*NODE FILE` nodal-averaged stress block — see this module's
+        docstring and BracketStructuralResult for what each means."""
+        if not os.path.isfile(frd_path):
+            raise StructuresEvaluationError(
+                f"ccx.exe finished but produced no {jobname}.frd output file — "
+                "the solve likely failed. Check the generated .inp for errors."
+            )
+        try:
+            nodal_stress = parse_frd_nodal_block(frd_path, "STRESS", 6)
+        except ValueError as exc:
+            raise StructuresEvaluationError(
+                f"Could not find nodal stress output in ccx output ({jobname}.frd) — "
+                "the solve may have failed silently."
+            ) from exc
+
+        von_mises_values = []
+        for sxx, syy, szz, sxy, syz, szx in nodal_stress.values():
+            vm = (
+                0.5 * ((sxx - syy) ** 2 + (syy - szz) ** 2 + (szz - sxx) ** 2 + 6 * (sxy**2 + syz**2 + szx**2))
+            ) ** 0.5
+            von_mises_values.append(vm)
+
+        von_mises_values.sort(reverse=True)
+        raw_peak_stress_mpa = von_mises_values[0]
+        top_n = max(1, int(len(von_mises_values) * _HOTSPOT_TOP_FRACTION))
+        hotspot_stress_mpa = sum(von_mises_values[:top_n]) / top_n
+
+        return hotspot_stress_mpa, raw_peak_stress_mpa
 
     def _validate_bracket_inputs(
         self,
@@ -600,7 +667,12 @@ class StructuresAgent:
                 "U",
                 "*NODE PRINT, NSET=FIXED",
                 "RF",
-                "*EL PRINT, ELSET=VOL",
+                # Nodal-averaged (extrapolated from Gauss points, averaged
+                # across elements sharing a node) stress, to .frd — see
+                # this module's docstring on why raw *EL PRINT Gauss-point
+                # stress alone doesn't converge near the fixed-hole-rim
+                # singularity.
+                "*NODE FILE",
                 "S",
                 "*END STEP",
                 "",
@@ -767,42 +839,6 @@ class StructuresAgent:
                 "the solve may have failed silently."
             )
         return max_abs_sxx_mpa
-
-    def _parse_max_von_mises(self, dat_text: str, *, jobname: str) -> float:
-        lines = dat_text.splitlines()
-        max_vm_mpa: float | None = None
-
-        i = 0
-        while i < len(lines):
-            if "stresses (elem, integ.pnt.,sxx" in lines[i]:
-                i += 1
-                while i < len(lines) and not lines[i].strip():
-                    i += 1  # skip the blank separator line before the data rows
-                while i < len(lines) and lines[i].strip():
-                    parts = lines[i].split()
-                    if len(parts) == 8:
-                        sxx, syy, szz, sxy, sxz, syz = (float(x) for x in parts[2:8])
-                        vm = (
-                            0.5
-                            * (
-                                (sxx - syy) ** 2
-                                + (syy - szz) ** 2
-                                + (szz - sxx) ** 2
-                                + 6 * (sxy**2 + sxz**2 + syz**2)
-                            )
-                        ) ** 0.5
-                        if max_vm_mpa is None or vm > max_vm_mpa:
-                            max_vm_mpa = vm
-                    i += 1
-                continue
-            i += 1
-
-        if max_vm_mpa is None:
-            raise StructuresEvaluationError(
-                f"Could not find stress output in ccx output ({jobname}.dat) — "
-                "the solve may have failed silently."
-            )
-        return max_vm_mpa
 
     def _parse_max_displacement_magnitude(self, dat_text: str, *, jobname: str) -> float:
         lines = dat_text.splitlines()
