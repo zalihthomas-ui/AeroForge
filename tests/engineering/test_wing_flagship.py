@@ -141,8 +141,7 @@ def test_already_passing_design_returns_immediately(
     )
     assert res.overall_status == "PASS"
     assert res.lift_adequate is True
-    assert len(res.iterations) == 1
-    assert res.iterations[0].overall_status == "PASS"
+    assert res.iterations == []
 
 
 @pytest.mark.parametrize(
