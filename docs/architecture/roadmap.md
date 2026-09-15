@@ -288,11 +288,107 @@ vice versa — still separate agents sharing a coordinate source).
 | Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
 | Design Agent + Aerodynamics Agent + wing airfoil sections | dune |
 
-## Next milestone: v0.6 (not yet scoped)
+## Milestone: v0.6 — real solid-mesh FEA + wing aero coupling (DONE)
 
-Candidates: mesh actual CAD solids (bracket/wing) for real FEA instead of
-CalculiX's native beam elements (needs a real mesher, e.g. gmsh — a
-materially bigger undertaking); couple the Aerodynamics Agent's evaluation
-to the wing's actual airfoil section; or Phase 5 (closed-loop
-optimization) research once there are at least two disciplines
-(aero + structures, both now real) worth optimizing across.
+Two parallel, non-overlapping tracks, both landed 2026-09-15.
+
+### Real 3D solid FEA on meshed CAD geometry (gmsh + CalculiX)
+
+The Structures Agent (v0.5) only analyzed a parametric 1D beam idealization
+via CalculiX's native B31 elements — never an actual meshed CAD solid.
+This closes that gap, proven against a second classical elasticity
+benchmark (the beam validation used Euler-Bernoulli theory; this uses
+**Kirsch's solution**, 1898): a small circular hole in a wide plate under
+remote uniaxial tension has a stress concentration factor of exactly 3.0
+at the hole edge — directly relevant since the bracket
+(`agents/geometry/bracket.py`) is itself a plate with holes.
+
+- **gmsh chosen and pre-validated by chief before delegating**: pip-
+  installable, no compiler needed, and confirmed to import a
+  build123d-exported STEP file directly (same OCC kernel) — including the
+  actual 4-hole bracket, meshed cleanly with zero errors. A standalone box
+  cantilever beam, meshed as C3D10 solid tets and solved the same way,
+  gave 95.10mm tip deflection vs. 95.24mm analytical Euler-Bernoulli
+  (0.15% error) — even tighter than v0.5's 1D beam-element result (0.30%).
+  Three independent methods (analytical, 1D beam FEA, 3D solid FEA) agree
+  within 0.3% of each other.
+- Two more gmsh-specific gotchas found and documented (on top of v0.5's
+  SOLVER=SPOOLES one): its Abaqus/`.inp` writer silently drops any entity
+  without an explicit Physical Group as soon as *any* group is defined
+  (so the volume itself must be grouped, not just the faces used for
+  node sets); and it also emits CPS6 plane-stress shell elements for 2D
+  physical groups that CalculiX rejects outright in a 3D analysis — fixed
+  by extracting just the `*NODE`/`*ELEMENT,type=C3D10` blocks from gmsh's
+  raw output rather than feeding it to `ccx.exe` directly.
+- `agents/structures/agent.py` — `StructuresAgent.evaluate_plate_with_hole
+  (width_mm, height_mm, thickness_mm, hole_diameter_mm, tensile_stress_mpa,
+  ...) -> PlateWithHoleResult(max_stress_mpa, nominal_stress_mpa,
+  stress_concentration_factor, theoretical_kt, error_pct)`.
+  `agents/structures/plate_with_hole.py` builds the plate (build123d) and
+  meshes it (gmsh, refined near the hole via Distance+Threshold fields
+  sized as ratios of hole diameter/plate width so it generalizes across
+  sizes) — kept out of `agents/geometry` since it's a validation fixture,
+  not a mission-doc component.
+- Textbook-correct minimal rigid-body constraint handling: the whole fixed
+  face pinned only in the loading direction (which alone blocks two
+  rotational DOF), plus two carefully chosen points pinning the 3
+  remaining DOF — avoids over-constraining and artificially stiffening
+  the stress reading.
+- Hole sizes needing a finite-width correction (i.e. not small enough for
+  the infinite-plate approximation) are explicitly rejected rather than
+  silently validated against the wrong theoretical Kt.
+- **Reported honestly, not tuned to hit a number**: reference case
+  (200×200×5mm plate, 10mm hole = 5% of width) converges to Kt=2.989,
+  0.36% error. Checked robustness at 3% and 8% hole-to-width ratios too —
+  0.50% and 1.96% error respectively, both still small but visibly growing
+  as the small-hole approximation is stretched, exactly as expected.
+- `examples/plate_with_hole/run.py` demonstrates the reference case.
+
+Explicitly **out of scope**: meshing/analyzing the bracket or wing
+themselves (this proves the pipeline on a purpose-built validation
+fixture, not yet wired to real mission-doc components) and a finite-width
+stress-concentration correction for larger holes.
+
+### Wing aerodynamics coupling
+
+The Aerodynamics Agent (v0.4) and the wing's `naca_airfoil`/`root_chord`/
+`wing_span` parameters (v0.5) existed independently — nothing computed a
+wing's actual aerodynamic performance from its own CAD spec.
+
+- `engineering/analysis/wing_aero.py` — `evaluate_wing_aero(spec,
+  cruise_velocity_mps=25.0 [mission doc's own UAV example value],
+  alpha_deg=4.0, ...) -> WingAeroSummary(reynolds_number, cl, cd,
+  l_over_d, lift_n, drag_n, backend)`. Computes Reynolds number from root
+  chord and cruise velocity, planform area from the trapezoidal wing
+  geometry, dynamic pressure, and calls `AerodynamicsAgent` with the
+  spec's actual `naca_airfoil` value to get real dimensional lift and drag
+  — the first time a wing's own geometry parameters drive an aerodynamic
+  evaluation rather than a hand-picked airfoil/Re/alpha.
+- `examples/wing/aero_summary.py` — parses a natural-language wing
+  requirement and prints its CAD parameters alongside computed
+  Re/CL/CD/L/D/lift/drag. Verified 2026-09-15: mission-doc reference wing
+  at 25 m/s gives Re≈4.11×10⁵ and physically sane lift/drag.
+
+Explicitly **out of scope**: feeding this back to size the wing's
+structure, or any optimization loop — this is a one-way evaluation.
+
+113/113 tests passing across both tracks combined.
+
+## Ownership (current sprint)
+
+| Area | Owner |
+|---|---|
+| Repo scaffolding, backend integration, CI, releases | chief (logo) |
+| Geometry Agent + CAD exporters + geometry validity checks + Structures Agent | kilo |
+| Design Agent + Aerodynamics Agent + wing airfoil sections + wing/aero coupling | dune |
+
+## Next milestone: v0.7 (not yet scoped)
+
+Candidates: mesh the actual bracket/wing geometry (not just the
+plate-with-hole validation fixture) for real FEA — needs real boundary
+condition assumptions (which faces are fixed, how load is applied) that
+don't have as clean a closed-form validation target as Kirsch's solution,
+so should be scoped carefully; or Phase 5 (closed-loop optimization)
+research now that two real disciplines (aero + structures) exist, e.g.
+sweeping a wing or bracket parameter and tracking how a real FEA/aero
+metric responds, as a precursor to an actual optimizer.

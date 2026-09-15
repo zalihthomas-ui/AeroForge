@@ -24,7 +24,7 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). Working today (v0.5):
+time (see `docs/architecture/roadmap.md`). Working today (v0.6):
 
 ```text
 Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / STL
@@ -32,16 +32,19 @@ Engineering Prompt → Design Agent → Geometry Agent → build123d → STEP / 
 
 for two components: a mounting **bracket** and a **wing** planform with a
 real NACA airfoil cross-section (see `examples/bracket/`, `examples/wing/`)
-— plus two standalone real-solver agents, not yet wired into the CAD loop:
+— plus two real-solver agents:
 
-- **Aerodynamics Agent** (`examples/airfoil/`): NACA airfoils via
-  NeuralFoil (a validated neural surrogate, always available) or real
-  **XFOIL** (vendored at `vendor/xfoil/` for Windows x64 + CPython 3.13 —
-  the PyPI package is broken upstream; see the roadmap's decision record).
-- **Structures Agent** (`examples/beam/`): cantilever beam FEA via real
-  **CalculiX** (install with `scripts/install_calculix_windows.sh`),
-  validated against exact closed-form Euler-Bernoulli beam theory
-  (~0.3% error) — the strongest validation in the repo.
+- **Aerodynamics Agent** (`examples/airfoil/`, `examples/wing/aero_summary.py`):
+  NACA airfoils via NeuralFoil (a validated neural surrogate, always
+  available) or real **XFOIL** (vendored at `vendor/xfoil/` for Windows
+  x64 + CPython 3.13 — the PyPI package is broken upstream; see the
+  roadmap's decision record). Coupled to the wing's own CAD parameters
+  (`engineering/analysis/wing_aero.py`) for real Reynolds number/lift/drag.
+- **Structures Agent** (`examples/beam/`, `examples/plate_with_hole/`):
+  real **CalculiX** FEA — a parametric cantilever beam (1D elements,
+  validated against Euler-Bernoulli theory, ~0.3% error) and a real
+  meshed 3D solid (a plate with a hole, gmsh + C3D10 tets, validated
+  against Kirsch's classical stress-concentration solution, ~0.4% error).
 
 Manufacturing analysis, optimization, and the frontend dashboard are real,
 unimplemented future phases — not stubbed out as if they worked. Do not
@@ -80,6 +83,8 @@ python examples/bracket/run.py
 python examples/wing/run.py
 python examples/airfoil/run.py
 python examples/beam/run.py
+python examples/plate_with_hole/run.py
+python examples/wing/aero_summary.py
 ```
 
 ## Contributing
