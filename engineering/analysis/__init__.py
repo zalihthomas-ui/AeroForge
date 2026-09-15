@@ -1,5 +1,10 @@
 """Engineering analysis package for AeroForge."""
 
+from engineering.analysis.bracket_materializer import (
+    BracketMaterializerError,
+    MaterializedBracketResult,
+    materialize_optimal_bracket,
+)
 from engineering.analysis.bracket_optimizer import (
     BracketDesignPoint,
     BracketOptimizationResult,
@@ -26,8 +31,10 @@ from engineering.analysis.wing_optimizer import (
 __all__ = [
     "AirfoilCandidateResult",
     "BracketDesignPoint",
+    "BracketMaterializerError",
     "BracketOptimizationResult",
     "BracketOptimizerError",
+    "MaterializedBracketResult",
     "MaterializedWingResult",
     "WingAeroError",
     "WingAeroSummary",
@@ -35,6 +42,7 @@ __all__ = [
     "WingOptimizationResult",
     "calculate_bracket_mass",
     "evaluate_wing_aero",
+    "materialize_optimal_bracket",
     "materialize_optimal_wing",
     "optimize_bracket_thickness_for_min_mass",
     "optimize_wing_for_max_l_over_d",
