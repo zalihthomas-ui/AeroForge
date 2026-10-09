@@ -24,8 +24,23 @@ The full mission, philosophy, and long-term roadmap are documented in
 ## Current status
 
 This repository is built **vertically**, one complete engineering loop at a
-time (see `docs/architecture/roadmap.md`). Working today (v0.12), and
-worth starting here: **`python examples/wing/flagship_demo.py`** runs the
+time (see `docs/architecture/roadmap.md`).
+
+**New in v0.14 — virtual wing structural test campaign**
+(`python examples/wing/structural_campaign.py`, see
+[`docs/tutorials/structural-campaign.md`](docs/tutorials/structural-campaign.md)):
+Prandtl lifting-line aerodynamics, CS-23-style V-n/gust design loads at
+ultimate load, a sized thin-walled wing box (spar caps + webs, buckling
+checks), and CalculiX shell FE verification of that box (static to
+ultimate load, linear buckling, natural frequencies), each validated
+against closed-form theory. It also re-checks the older flagship below in
+3D: its sized wing actually makes 82.5 N of lift, not the 117.7 N the 2D
+section method claimed (-30 %), so the campaign re-sizes with a cambered
+NACA 4412 (AR 7.5) and reports a real 0.95 kg sized box mass instead of a
+solid-section safety factor.
+
+The v0.11-v0.12 flagship (still working, kept for comparison), and
+worth starting here for the original loop: **`python examples/wing/flagship_demo.py`** runs the
 actual mission doc §20 flagship demonstration end-to-end — a UAV wing
 requirement, evaluated for real, genuinely failing a lift-adequacy check
 (65.67N produced vs. 117.72N needed for a 12kg-MTOW aircraft), then
@@ -137,7 +152,8 @@ python examples/wing/structural_analysis.py
 python examples/bracket/optimize.py    # slow: real closed-loop FEA optimization, ~10 min
 python examples/bracket/materialize.py # slow: chains optimize + materialize, ~15-17 min
 python examples/bracket/optimize_2d.py # slow: 2D COBYLA search, ~20-30 min
-python examples/wing/flagship_demo.py  # the flagship demo -- start here if you only run one
+python examples/wing/flagship_demo.py  # the original (2D-lift) flagship demo
+python examples/wing/structural_campaign.py  # v0.14: lifting line + loads + wing box + FE (~40 s)
 ```
 
 ## Contributing

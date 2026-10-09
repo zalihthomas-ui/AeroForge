@@ -35,6 +35,18 @@ As defense in depth (in case some other input triggers a similar hang for
 a reason we haven't found), the agent also runs `ccx.exe` with an explicit
 subprocess timeout rather than trusting the solver choice alone.
 
+## Second gotcha: run eigenvalue analyses single-threaded
+
+With OpenMP threads (`OMP_NUM_THREADS` > 1) this build's `*BUCKLE` and
+`*FREQUENCY` eigensolver is **non-deterministic** and intermittently returns
+spurious eigenvalues: in v0.14 the very same wing-box buckling deck gave
+first load factors of 0.70, 1.01 and 1.72 on consecutive runs. With
+`OMP_NUM_THREADS=1` it returned 1.72 every time and the value is
+mesh-converged (1.740 / 1.728 / 1.723 / 1.721 on four refinements).
+`agents/structures/wing_box_fe.py` therefore forces one thread (the models
+are small: a few seconds per solve), and
+`tests/structures/test_wing_box_fe.py` checks repeatability.
+
 ## Validation
 
 Verified 2026-09-15 against closed-form Euler-Bernoulli cantilever beam

@@ -1004,3 +1004,66 @@ composite layup) is chosen; investigating the recurring
 aircraft weight budget model, enabling a genuine mass-based PASS/FAIL
 criterion in the flagship demo (currently informational only for lack of
 a sourced requirement to check against).
+
+## Milestone: v0.14 — virtual wing structural test campaign (DONE)
+
+Replaces the flagship's two weak points: lift computed as a 2D section CL
+times planform area (no finite-wing correction), and a "safety factor" from
+solid-section FEA at 1 g cruise (SF ~350-1600, no design meaning).
+
+### What was built
+
+- `engineering/analysis/wing_lifting_line.py` — Prandtl lifting line
+  (Glauert Fourier collocation) for straight tapered wings; section `a0`
+  and `alpha_L0` from NeuralFoil at mean-chord Re. Outputs CL, CDi, span
+  efficiency, cl(y), lift per span.
+- `engineering/analysis/wing_loads.py` — V-n diagram, CS-23.341 gust
+  (Pratt, Kg), ultimate factor 1.5, spanwise shear/bending (inertia relief
+  ignored, conservative).
+- `agents/structures/wing_box.py` — thin-walled box (20-60 % chord, depth
+  from the airfoil thickness), materials (Al 6061-T6, 7075-T6, quasi-iso
+  CFRP with caveats), closed-form stress/deflection/plate buckling,
+  per-bay minimum-mass sizing (brentq + sheet-gauge rounding), beam
+  natural frequencies.
+- `agents/structures/wing_box_fe.py` + `StructuresAgent.evaluate_wing_box`
+  — own structured S8R mesh (no gmsh), CalculiX static / `*BUCKLE` /
+  `*FREQUENCY`, all `SOLVER=SPOOLES`.
+- `engineering/analysis/wing_campaign.py`, `examples/wing/structural_campaign.py`
+  — requirement → aero sizing → loads → box sizing → FE verification → CAD.
+
+### Decision record
+
+- **The old flagship answer does not survive the 3D correction**: its
+  sized wing (NACA 0012, 492 mm root, AR 4.6) makes 82.5 N, not 117.7 N.
+  Closing lift = weight with NACA 0012 in 3D needs AR 2.5, outside
+  lifting-line validity, so the campaign selects among NACA 0012/2412/4412
+  the smallest valid wing: NACA 4412, root 305 mm, AR 7.46. The old
+  flagship is left untouched for comparison.
+- **Unswept planform** for the campaign: lifting line and the straight
+  box beam assume no sweep.
+- **Gust governs** (n = 4.24 vs 3.8) and Va > Vd for this slow wing; the
+  gust formula is not stall-limited, so the result is conservative — kept
+  and reported rather than tuned away.
+- **Load introduction on the upper spar-cap lines**: spreading nodal lift
+  over the 0.3 mm webs produced spurious web-crippling buckling modes.
+- **Single-threaded ccx** for eigenvalue runs (non-deterministic otherwise;
+  see vendor/calculix/README.md).
+- **Buckling requirement is "none below ultimate" with SS-plate edges** —
+  conservative; FE shows the real first buckling at 1.73 × ultimate. A
+  calibrated coefficient would save mass; deliberately not done yet.
+
+### Results and validation
+
+See `docs/tutorials/structural-campaign.md` for the full tables. Box mass
+0.95 kg (Al 6061-T6), all margins >= 0, every bay buckling-governed. FE vs
+closed form: equilibrium ~1e-8 %, tip deflection +3 %, cover stress < 3 %,
+first bending frequency -3 %, buckling factor inside the SS/clamped bound
+and mesh-converged < 1 %. 33 new tests.
+
+## Next milestone: v0.15 (candidates)
+
+Calibrated cover-buckling coefficient from the FE (or post-buckled skin
+design above limit load); stringer-stiffened covers; torsion/shear-centre
+offset from the quarter-chord lift; composite laminate (ply-level) option;
+inertia relief and a real aircraft weight budget; swept-wing aerodynamics
+(vortex lattice) to restore sweep.

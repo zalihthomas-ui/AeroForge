@@ -44,3 +44,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Campaign outputs (CalculiX work dirs, reports, FE fields)
+/artifacts/

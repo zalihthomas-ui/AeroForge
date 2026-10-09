@@ -123,6 +123,8 @@ from agents.structures.bracket_mesh import BracketMesh, mesh_bracket
 from agents.structures.frd_utils import parse_frd_nodal_block
 from agents.structures.inp_utils import format_nset_lines
 from agents.structures.plate_with_hole import PlateMesh, build_plate_with_hole, mesh_plate_with_hole
+from agents.structures.wing_box import BoxThickness, Material, WingBoxGeometry
+from agents.structures.wing_box_fe import WingBoxFEError, WingBoxFEResult, run_wing_box_fe
 from agents.structures.wing_mesh import WingMesh, build_half_wing, mesh_half_wing
 from cad.exporters import export_step
 from engineering.requirements.schema import EngineeringSpec
@@ -772,6 +774,49 @@ class StructuresAgent:
                 "",
             ]
         )
+
+    def evaluate_wing_box(
+        self,
+        geometry: WingBoxGeometry,
+        thickness: BoxThickness,
+        material: Material,
+        lift_y_mm,
+        lift_per_span_npm,
+        n_span: int = 96,
+        n_width: int = 12,
+        n_height: int = 4,
+        rib_thickness_mm: float = 1.0,
+        n_buckling_modes: int = 6,
+        n_frequency_modes: int = 6,
+        work_dir: str | None = None,
+    ) -> WingBoxFEResult:
+        """Thin-walled wing-box shell FE (CalculiX S8R): static, linear buckling and modes.
+
+        The box is the one sized in closed form by
+        `agents.structures.wing_box.size_box`; `lift_per_span_npm` is the
+        running lift at the load level to verify (normally ULTIMATE), so the
+        returned buckling factors are load multipliers on that level (> 1
+        means no buckling before it). See `agents/structures/wing_box_fe.py`.
+
+        Raises:
+            StructuresEvaluationError: ccx.exe missing, the solve failed or
+                its output could not be parsed.
+        """
+        ccx_path = _find_ccx_path()
+        if ccx_path is None:
+            raise StructuresEvaluationError(
+                "ccx.exe (CalculiX) not found on PATH or at the default MSYS2 "
+                "location -- see vendor/calculix/README.md."
+            )
+        try:
+            return run_wing_box_fe(
+                ccx_path, geometry, thickness, material, lift_y_mm, lift_per_span_npm,
+                n_span=n_span, n_width=n_width, n_height=n_height,
+                rib_thickness_mm=rib_thickness_mm, n_buckling_modes=n_buckling_modes,
+                n_frequency_modes=n_frequency_modes, work_dir=work_dir,
+            )
+        except WingBoxFEError as exc:
+            raise StructuresEvaluationError(str(exc)) from exc
 
     def evaluate_wing(
         self,
