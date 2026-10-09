@@ -24,6 +24,7 @@ import numpy as np
 
 from engineering.analysis.wing_campaign import (
     CampaignRequirement,
+    build_structure_cad,
     fe_vs_closed_form,
     margins_from_fe,
     run_campaign,
@@ -97,9 +98,19 @@ def main() -> None:
             print(f"  FE vs closed form: {k} = {v:+.2f}")
         for k, v in margins_from_fe(res).items():
             print(f"  FE MS {k}: {v:+.3f}")
-    print(f"\n[6] CAD: {res.cad_paths}")
+    print(f"\n[6] CAD: outer mould line {res.cad_paths}")
+    structure = build_structure_cad(res, export_dir=args.out)
+    masses = structure.masses_kg()
+    print("  complete wing structure (ribs + spars + box covers + LE/TE skin, both halves):")
+    for g, m in masses.items():
+        print(f"    {g:20s} {2 * len(structure.parts[g]):3d} solids  {m:.3f} kg")
+    print(f"    {'total':20s}             {sum(masses.values()):.3f} kg")
+    print(f"  STEP assembly: {os.path.join(args.out, 'wing_structure_assembly.step')}")
 
     report = _report_dict(res)
+    report["structure_cad"] = {"masses_kg": masses, "total_kg": sum(masses.values()),
+                               "solids": {g: 2 * len(p) for g, p in structure.parts.items()},
+                               "step": os.path.join(args.out, "wing_structure_assembly.step")}
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "campaign_report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)

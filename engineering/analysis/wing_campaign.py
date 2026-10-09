@@ -297,3 +297,35 @@ def margins_from_fe(result: CampaignResult) -> dict[str, float]:
         "strength (Ftu / peak von Mises away from clamp)": mat.ftu_mpa / fe.max_von_mises_away_from_root_mpa - 1.0,
         "buckling (first eigenvalue - 1)": fe.buckling_factors[0] - 1.0,
     }
+
+
+def build_structure_cad(result: CampaignResult, export_dir: str | None = None, **spec_overrides):
+    """Complete wing structure (ribs, spars, box covers, LE/TE skin) from the sized campaign result.
+
+    Returns the `WingStructure`; with `export_dir`, also writes a STEP assembly of
+    the whole wing and one STL per component group.
+    """
+    from agents.geometry.wing_structure import WingStructureSpec, build_wing_structure
+
+    s, a = result.sizing, result.aero
+    spec = WingStructureSpec(
+        semispan_mm=result.requirement.span_mm / 2.0,
+        root_chord_mm=a.root_chord_mm,
+        tip_chord_mm=a.tip_chord_mm,
+        naca=a.naca,
+        bay_edges_mm=[float(v) for v in s.thickness.bay_edges_mm],
+        t_cap_mm=[float(v) for v in s.thickness.t_cap_mm],
+        t_web_mm=[float(v) for v in s.thickness.t_web_mm],
+        front_spar_xc=result.box_geometry.front_spar_xc,
+        rear_spar_xc=result.box_geometry.rear_spar_xc,
+        **spec_overrides,
+    )
+    structure = build_wing_structure(spec)
+    if export_dir:
+        from cad.exporters import export_step, export_stl
+
+        os.makedirs(export_dir, exist_ok=True)
+        export_step(structure.assembly(), os.path.join(export_dir, "wing_structure_assembly.step"))
+        for group, comp in structure.full_wing().items():
+            export_stl(comp, os.path.join(export_dir, f"wing_structure_{group.replace(' ', '_')}.stl"))
+    return structure

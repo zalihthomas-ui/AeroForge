@@ -1030,6 +1030,10 @@ solid-section FEA at 1 g cruise (SF ~350-1600, no design meaning).
   `*FREQUENCY`, all `SOLVER=SPOOLES`.
 - `engineering/analysis/wing_campaign.py`, `examples/wing/structural_campaign.py`
   — requirement → aero sizing → loads → box sizing → FE verification → CAD.
+- `agents/geometry/wing_structure.py` — the complete internal structure as
+  CAD from the sized result: ribs (lightening holes), front/rear spar webs and
+  box covers stepped per bay, LE/TE skin; STEP assembly + per-group STL and a
+  mass breakdown (68 solids, 1.52 kg for the campaign wing).
 
 ### Decision record
 

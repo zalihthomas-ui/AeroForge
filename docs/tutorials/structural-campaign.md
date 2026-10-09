@@ -24,7 +24,7 @@ The campaign replaces the two weakest links of the v0.8–v0.13 flagship
 | Loads | `engineering/analysis/wing_loads.py` | V-n diagram (stall line, +3.8/−1.5 manoeuvre), CS-23.341 Pratt gust (Ude 15.24 m/s at Vc, 7.62 m/s at Vd, `Kg = 0.88 mu/(5.3+mu)`), ultimate = 1.5 × limit; spanwise shear and bending from the lifting-line distribution, **inertia relief ignored (conservative)**. |
 | Box sizing | `agents/structures/wing_box.py` | Rectangular box 20 %–60 % chord, height = thinner airfoil thickness at the two spars; covers (t_cap) and webs (t_web) stepped per bay; bending stress, web shear, SS-plate buckling (k = 4 compression, k_s = 5.35 shear), tip deflection by integrating M/EI; per-bay minimum gauge found with `brentq` and rounded up to a 0.05 mm sheet step. |
 | FE verification | `agents/structures/wing_box_fe.py`, `StructuresAgent.evaluate_wing_box` | Own structured S8R shell mesh (box "tube" + ribs, no gmsh), root clamped, lift as nodal forces on the upper spar-cap lines. Three CalculiX runs: static at **ultimate** load, `*BUCKLE`, `*FREQUENCY`, all `SOLVER=SPOOLES`. |
-| CAD | `wing_campaign.export_wing_cad` | STEP/STL of the sized (unswept, untwisted) wing. |
+| CAD | `wing_campaign.export_wing_cad`, `wing_campaign.build_structure_cad` → `agents/geometry/wing_structure.py` | STEP/STL of the outer mould line, plus the **complete internal structure**: 14 ribs (with lightening holes), front and rear spar webs and upper/lower box covers stepped per sized bay, leading- and trailing-edge skin — exported as one STEP assembly and one STL per component group. |
 
 ## Validation (all in the test suite)
 
@@ -61,6 +61,24 @@ repeatable (and tested).
 | Margins (closed form, ultimate) | cover buckling +0.02, web shear buckling +0.77, cover strength +8.5 |
 | FE at ultimate | tip deflection 9.8 mm, peak von Mises 39 MPa away from the clamp (52 MPa at it), first buckling factor 1.73, first modes 67.6 / 186.8 / 220.5 Hz |
 
+## Complete wing structure (CAD)
+
+| Component (both halves) | Solids | Material | Mass |
+|---|---|---|---|
+| Ribs (1 mm, 2 lightening holes each) | 14 | Al 6061-T6 | 0.172 kg |
+| Spar webs (front 20 %, rear 60 % chord) | 24 | Al 6061-T6 | 0.067 kg |
+| Box covers (stepped per bay) | 24 | Al 6061-T6 | 0.887 kg |
+| Leading-edge skin (0.5 mm) | 2 | glass/epoxy | 0.153 kg |
+| Trailing-edge skin (0.5 mm, to 95 % chord) | 4 | glass/epoxy | 0.243 kg |
+| **Total wing structure** | **68** | | **1.52 kg** |
+
+The CAD keeps the true NACA 4412 surface (the analysis idealises the box as a
+rectangle at the thinner spar depth — conservative). Parts touch/overlap at
+joints by up to one skin thickness; no fasteners, flanges or bonding lands;
+the trailing edge is left open behind 95 % chord. This 1.52 kg, not the
+0.95 kg box alone, is the like-for-like comparison with the old 1.16 kg
+whole-wing skin estimate (which had no internal structure at all).
+
 ## Modelling implications: old 2D flagship vs v0.14 campaign
 
 | Quantity | v0.8–v0.13 flagship | v0.14 campaign | Why it changed |
@@ -72,7 +90,7 @@ repeatable (and tested).
 | Structural load | 1 g cruise lift | ultimate n = 6.36 (gust, × 1.5) | design-load cases |
 | Structure | solid aluminium section | thin-walled box, 6 sized bays | real wing construction |
 | "Safety" metric | SF 350 → 1643 (meaningless) | margins of safety ≥ 0 incl. buckling; FE buckling factor 1.73 at ultimate | |
-| Mass | 1.16 kg skin-only estimate (0.5 mm glass shell, informational) | 0.95 kg sized box (Al 6061-T6), from the actual structure | |
+| Mass | 1.16 kg skin-only estimate (0.5 mm glass shell, informational) | 0.95 kg sized box (Al 6061-T6); 1.52 kg complete structure (box + ribs + LE/TE skin, from CAD) | the old number had no internal structure |
 | Sweep / dihedral | 12° / 4° | 0° / 0° | lifting line and the straight-beam box are for unswept wings |
 
 ## Caveats

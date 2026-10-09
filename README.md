@@ -37,7 +37,9 @@ against closed-form theory. It also re-checks the older flagship below in
 3D: its sized wing actually makes 82.5 N of lift, not the 117.7 N the 2D
 section method claimed (-30 %), so the campaign re-sizes with a cambered
 NACA 4412 (AR 7.5) and reports a real 0.95 kg sized box mass instead of a
-solid-section safety factor.
+solid-section safety factor. It ends with the complete wing structure as CAD
+(`agents/geometry/wing_structure.py`): ribs, front/rear spars, stepped box
+covers and leading/trailing-edge skin, 68 solids, 1.52 kg, one STEP assembly.
 
 The v0.11-v0.12 flagship (still working, kept for comparison), and
 worth starting here for the original loop: **`python examples/wing/flagship_demo.py`** runs the
