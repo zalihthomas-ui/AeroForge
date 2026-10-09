@@ -146,4 +146,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE), except the optional vendored XFOIL wheel in `vendor/xfoil/`, which is GPL-3.0 (see [`vendor/xfoil/README.md`](vendor/xfoil/README.md)).

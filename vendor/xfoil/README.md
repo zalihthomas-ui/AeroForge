@@ -47,3 +47,14 @@ Windows-specific packaging issues documented here — see
 history (missing `mingw32-make`, the broken sdist, distutils defaulting to
 the `msvc` compiler class instead of `mingw32`, and why static linking was
 needed) before troubleshooting a build failure on a new machine.
+
+## License
+
+The wheel in this directory is **not** covered by AeroForge's MIT license.
+It is a binary build of [DARcorporation/xfoil-python](https://github.com/DARcorporation/xfoil-python),
+which (like XFOIL itself, © Mark Drela and Harold Youngren) is licensed
+under the **GNU General Public License v3.0**. See `COPYING` in this
+directory. The corresponding source is available upstream at
+https://github.com/DARcorporation/xfoil-python (built unmodified, version
+1.1.1; build steps in `scripts/build_xfoil_windows.sh`). AeroForge only
+uses it as an optional, separately installed dependency.
