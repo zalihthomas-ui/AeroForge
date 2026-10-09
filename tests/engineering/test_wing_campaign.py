@@ -5,6 +5,7 @@ import pytest
 from agents.structures.agent import CALCULIX_AVAILABLE
 from engineering.analysis.wing_campaign import (
     CampaignRequirement,
+    build_structure_cad,
     fe_vs_closed_form,
     margins_from_fe,
     run_campaign,
@@ -52,3 +53,12 @@ def test_fe_verifies_the_sized_box(tmp_path):
     assert abs(cmp["first_bending_freq_diff_pct"]) < 5.0
     assert 1.0 <= cmp["buckling_fe_over_ss_plate"] <= 6.97 / 4.0
     assert all(v >= 0.0 for v in margins_from_fe(r).values())
+
+
+def test_structure_cad_export_writes_named_assembly_parts_and_rib_flats(closed_form_result, tmp_path):
+    structure = build_structure_cad(closed_form_result, export_dir=str(tmp_path), n_profile=21)
+    step = (tmp_path / "wing_structure_assembly.step").read_text(encoding="latin-1")
+    assert "PRODUCT('Wing'" in step and "PRODUCT('Rib_1_Stbd'" in step and "COLOUR_RGB" in step
+    n_solids = 2 * sum(len(ps) for ps in structure.parts.values())
+    assert len(list((tmp_path / "parts").glob("*.step"))) == n_solids
+    assert len(list((tmp_path / "rib_flats").glob("Rib_*.dxf"))) == len(structure.spec.bay_edges_mm)

@@ -27,11 +27,14 @@ shape. Mass is from solid volumes x density.
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass, field
 
 import numpy as np
 from build123d import (
+    Circle,
+    Color,
     Compound,
     Cylinder,
     Face,
@@ -48,6 +51,13 @@ from build123d import (
 
 AL_DENSITY_KG_M3 = 2700.0
 SKIN_DENSITY_KG_M3 = 1600.0  # light glass/epoxy, as in agents/geometry/wing.py
+
+# Assembly-tree names and display colours per component group (exported to STEP).
+GROUP_LABELS = {"ribs": "Ribs", "spars": "Spars", "box covers": "BoxCovers",
+                "leading-edge skin": "LeadingEdgeSkin", "trailing-edge skin": "TrailingEdgeSkin"}
+GROUP_COLORS = {"ribs": Color(0.40, 0.73, 0.42), "spars": Color(1.00, 0.70, 0.00),
+                "box covers": Color(0.31, 0.76, 0.97), "leading-edge skin": Color(0.75, 0.78, 0.82),
+                "trailing-edge skin": Color(0.62, 0.65, 0.70)}
 
 
 class WingStructureError(ValueError):
@@ -132,18 +142,28 @@ class WingStructure:
         return {g: vol[g] * 1e-9 * self.densities[g] for g in vol}
 
     def full_wing(self) -> dict[str, Compound]:
-        """Both halves of every group as one compound per group."""
+        """Both halves of every group as one labelled, coloured compound per group.
+
+        The built half wing lies on +Y, which is starboard for this frame (X aft,
+        Z up); its mirror image is the port half. Every solid keeps a readable
+        name (e.g. ``Rib_3_Stbd``) so CAD tools show a meaningful assembly tree.
+        """
         out = {}
         for g, ps in self.parts.items():
             solids = []
             for p in ps:
-                solids.append(p)
-                solids.append(mirror(p, about=Plane.XZ))
-            out[g] = Compound(children=solids)
+                base = p.label or g
+                stbd = copy.copy(p)
+                stbd.label, stbd.color = f"{base}_Stbd", GROUP_COLORS[g]
+                port = mirror(p, about=Plane.XZ)
+                port.label, port.color = f"{base}_Port", GROUP_COLORS[g]
+                solids += [stbd, port]
+            out[g] = Compound(children=solids, label=GROUP_LABELS[g])
         return out
 
-    def assembly(self) -> Compound:
-        return Compound(children=list(self.full_wing().values()))
+    def assembly(self, label: str = "Wing") -> Compound:
+        """The full wing as a named assembly: wing -> component group -> part."""
+        return Compound(children=list(self.full_wing().values()), label=label)
 
 
 def _section(spec: WingStructureSpec, y: float, x0: float, x1: float, t: float, upper: bool, n: int) -> Face:
@@ -178,23 +198,52 @@ def _web_section(spec: WingStructureSpec, y: float, xc_spar: float, t: float, sk
     return _face(np.array([[x - t / 2, bot], [x + t / 2, bot], [x + t / 2, top], [x - t / 2, top]]), y)
 
 
-def _rib(spec: WingStructureSpec, y: float, t: float, n: int) -> Part:
-    c = spec.chord(y)
+def _rib_profile(spec: WingStructureSpec, c: float, n: int) -> np.ndarray:
+    """Closed rib outline (x, z) in mm for local chord c."""
     xc = _cosine(0.0, 1.0, n)
     zu, zl = naca4_surfaces(spec.naca, xc)
-    pts = np.concatenate([np.column_stack([xc[::-1], zu[::-1]]), np.column_stack([xc[1:-1], zl[1:-1]])]) * c
+    return np.concatenate([np.column_stack([xc[::-1], zu[::-1]]), np.column_stack([xc[1:-1], zl[1:-1]])]) * c
+
+
+def _rib_holes(spec: WingStructureSpec, c: float) -> list[tuple[float, float, float]]:
+    """Lightening holes as (x, z, radius) in mm: two round holes in the box, 55 % of local depth."""
+    if not spec.rib_lightening_holes:
+        return []
+    holes = []
+    for frac in (0.3, 0.7):
+        xh = spec.front_spar_xc + frac * (spec.rear_spar_xc - spec.front_spar_xc)
+        zu_h, zl_h = naca4_surfaces(spec.naca, np.array([xh]))
+        depth = (zu_h[0] - zl_h[0]) * c
+        holes.append((xh * c, 0.5 * (zu_h[0] + zl_h[0]) * c, 0.275 * depth))
+    return holes
+
+
+def _rib(spec: WingStructureSpec, y: float, t: float, n: int) -> Part:
+    c = spec.chord(y)
     y0 = min(max(y - t / 2, 0.0), spec.semispan_mm - t)
-    rib = extrude(_face(pts, y0), amount=t, dir=(0, 1, 0))
-    if spec.rib_lightening_holes:
-        # two round lightening holes inside the box, each 55 % of the local depth
-        for frac in (0.3, 0.7):
-            xh = spec.front_spar_xc + frac * (spec.rear_spar_xc - spec.front_spar_xc)
-            zu_h, zl_h = naca4_surfaces(spec.naca, np.array([xh]))
-            depth = (zu_h[0] - zl_h[0]) * c
-            zc = 0.5 * (zu_h[0] + zl_h[0]) * c
-            hole = Pos(xh * c, y0 + t / 2, zc) * Rot(90, 0, 0) * Cylinder(0.275 * depth, 3 * t)
-            rib = rib - hole
+    rib = extrude(_face(_rib_profile(spec, c, n), y0), amount=t, dir=(0, 1, 0))
+    for xh, zc, r in _rib_holes(spec, c):
+        rib = rib - Pos(xh, y0 + t / 2, zc) * Rot(90, 0, 0) * Cylinder(r, 3 * t)
     return rib
+
+
+def rib_flat_patterns(spec: WingStructureSpec) -> dict[str, Face]:
+    """2-D cutting profiles of every rib (outline + lightening holes) in the XY plane, mm.
+
+    X is chordwise from the leading edge and Y is the airfoil's thickness
+    direction, ready for laser/water-jet cutting from `rib_thickness_mm` sheet.
+    Keys match the rib part labels (``Rib_1`` at the root ... tip).
+    """
+    spec.validate()
+    out = {}
+    for i, y in enumerate(spec.bay_edges_mm):
+        c = spec.chord(float(y))
+        pts = [(float(px), float(pz), 0.0) for px, pz in _rib_profile(spec, c, spec.n_profile)]
+        face = make_face(Wire.make_polygon(pts, close=True))
+        for xh, zc, r in _rib_holes(spec, c):
+            face = face - Pos(xh, zc, 0) * Circle(r)
+        out[f"Rib_{i + 1}"] = face
+    return out
 
 
 def build_wing_structure(spec: WingStructureSpec) -> WingStructure:
@@ -208,22 +257,32 @@ def build_wing_structure(spec: WingStructureSpec) -> WingStructure:
     for b in range(len(spec.t_cap_mm)):
         ya, yb = float(edges[b]), float(edges[b + 1])
         tc, tw = float(spec.t_cap_mm[b]), float(spec.t_web_mm[b])
-        for xs in (spec.front_spar_xc, spec.rear_spar_xc):
-            parts["spars"].append(loft([_web_section(spec, ya, xs, tw, tc), _web_section(spec, yb, xs, tw, tc)]))
-        for upper in (True, False):
-            parts["box covers"].append(loft([
+        for name, xs in (("Front", spec.front_spar_xc), ("Rear", spec.rear_spar_xc)):
+            web = loft([_web_section(spec, ya, xs, tw, tc), _web_section(spec, yb, xs, tw, tc)])
+            web.label = f"{name}Spar_Bay{b + 1}"
+            parts["spars"].append(web)
+        for name, upper in (("Upper", True), ("Lower", False)):
+            cover = loft([
                 _section(spec, ya, spec.front_spar_xc, spec.rear_spar_xc, tc, upper, n),
                 _section(spec, yb, spec.front_spar_xc, spec.rear_spar_xc, tc, upper, n),
-            ]))
+            ])
+            cover.label = f"{name}Cover_Bay{b + 1}"
+            parts["box covers"].append(cover)
     s0, s1 = 0.0, spec.semispan_mm
-    parts["leading-edge skin"].append(loft([_nose_section(spec, s0, sk, n), _nose_section(spec, s1, sk, n)]))
-    for upper in (True, False):
-        parts["trailing-edge skin"].append(loft([
+    nose = loft([_nose_section(spec, s0, sk, n), _nose_section(spec, s1, sk, n)])
+    nose.label = "LeadingEdgeSkin"
+    parts["leading-edge skin"].append(nose)
+    for name, upper in (("Upper", True), ("Lower", False)):
+        te = loft([
             _section(spec, s0, spec.rear_spar_xc, spec.te_skin_end_xc, sk, upper, n),
             _section(spec, s1, spec.rear_spar_xc, spec.te_skin_end_xc, sk, upper, n),
-        ]))
-    for y in edges:
-        parts["ribs"].append(_rib(spec, float(y), spec.rib_thickness_mm, n))
+        ])
+        te.label = f"TrailingEdgeSkin_{name}"
+        parts["trailing-edge skin"].append(te)
+    for i, y in enumerate(edges):
+        rib = _rib(spec, float(y), spec.rib_thickness_mm, n)
+        rib.label = f"Rib_{i + 1}"
+        parts["ribs"].append(rib)
     for g, ps in parts.items():
         for p in ps:
             if not p.is_valid or p.volume <= 0:

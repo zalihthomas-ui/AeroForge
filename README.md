@@ -126,6 +126,25 @@ tests/           unit tests, mirrored by subsystem
 docs/            architecture notes, tutorials, research
 ```
 
+## CAD outputs and using them in SolidWorks / Fusion / CATIA
+
+`python examples/wing/structural_campaign.py --out <dir>` writes:
+
+| File | What it is |
+|---|---|
+| `wing_structure_assembly.step` | Whole wing as one assembly: `Wing > Ribs / Spars / BoxCovers / LeadingEdgeSkin / TrailingEdgeSkin > Rib_3_Stbd ...`, colour per component group, millimetres |
+| `parts/*.step` | One STEP file per solid (68 files), named like the assembly parts |
+| `rib_flats/Rib_*.dxf` | 2-D cutting profiles of every rib (outline + lightening holes), mm, for laser / water-jet cutting |
+| `*.stl` | Meshes per component group (3D printing, visualisation) |
+
+STEP files are AP214 (`AUTOMOTIVE_DESIGN`) exact B-rep geometry. They open in SolidWorks,
+Fusion 360, CATIA, NX, Onshape and FreeCAD with the assembly tree, part names and colours
+intact, and can be measured, drawn, meshed and used in downstream FEA. They are *not*
+parametric in those tools: no sketch/feature history survives a STEP transfer, so a CAD
+tool shows each part as an imported body (direct editing works; feature recognition will
+not rebuild the lofted airfoil surfaces). Make design changes through AeroForge's
+parameters and re-export.
+
 ## Quickstart
 
 ```bash

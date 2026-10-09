@@ -302,8 +302,10 @@ def margins_from_fe(result: CampaignResult) -> dict[str, float]:
 def build_structure_cad(result: CampaignResult, export_dir: str | None = None, **spec_overrides):
     """Complete wing structure (ribs, spars, box covers, LE/TE skin) from the sized campaign result.
 
-    Returns the `WingStructure`; with `export_dir`, also writes a STEP assembly of
-    the whole wing and one STL per component group.
+    Returns the `WingStructure`; with `export_dir`, also writes a named, coloured
+    STEP assembly of the whole wing (Wing > group > part), one STEP file per part
+    under ``parts/``, a DXF cutting profile per rib under ``rib_flats/`` and one
+    STL per component group.
     """
     from agents.geometry.wing_structure import WingStructureSpec, build_wing_structure
 
@@ -322,10 +324,20 @@ def build_structure_cad(result: CampaignResult, export_dir: str | None = None, *
     )
     structure = build_wing_structure(spec)
     if export_dir:
-        from cad.exporters import export_step, export_stl
+        from agents.geometry.wing_structure import rib_flat_patterns
+        from cad.exporters import (
+            export_parts_step,
+            export_profile_dxf,
+            export_step_assembly,
+            export_stl,
+        )
 
         os.makedirs(export_dir, exist_ok=True)
-        export_step(structure.assembly(), os.path.join(export_dir, "wing_structure_assembly.step"))
+        assembly = structure.assembly()
+        export_step_assembly(assembly, os.path.join(export_dir, "wing_structure_assembly.step"))
+        export_parts_step(assembly, os.path.join(export_dir, "parts"))
+        for name, face in rib_flat_patterns(spec).items():
+            export_profile_dxf(face, os.path.join(export_dir, "rib_flats", f"{name}.dxf"))
         for group, comp in structure.full_wing().items():
             export_stl(comp, os.path.join(export_dir, f"wing_structure_{group.replace(' ', '_')}.stl"))
     return structure
