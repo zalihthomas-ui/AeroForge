@@ -309,3 +309,40 @@ def test_real_bracket_optimization_calculix() -> None:
         assert pt.thickness_mm > 0
         assert pt.mass_kg > 0
         assert pt.hotspot_stress_mpa > 0
+
+
+@pytest.mark.parametrize(
+    ("allowable", "xtol"),
+    [(12.0, 0.05), (14.0, 0.1), (17.0, 0.1)],  # cases where brentq's root lands on the infeasible side
+)
+def test_optimizer_never_returns_a_design_over_the_allowable(allowable: float, xtol: float) -> None:
+    """brentq converges to the boundary from either side within xtol; the result must stay feasible."""
+    mock_agent = MagicMock(spec=StructuresAgent)
+
+    def mock_eval(**kwargs):
+        s = 50.0 / kwargs["thickness_mm"]
+        return BracketStructuralResult(
+            hotspot_stress_mpa=s,
+            raw_peak_stress_mpa=s,
+            max_deflection_mm=0.01,
+            equilibrium_error_pct=0.001,
+            mesh_converged=True,
+            coarse_mesh_hotspot_stress_mpa=s,
+            fine_mesh_hotspot_stress_mpa=s,
+        )
+
+    mock_agent.evaluate_bracket.side_effect = mock_eval
+    result = optimize_bracket_thickness_for_min_mass(
+        length_mm=100.0,
+        width_mm=80.0,
+        hole_diameter_mm=8.0,
+        hole_count=4,
+        applied_force_n=500.0,
+        max_allowable_stress_mpa=allowable,
+        thickness_bounds_mm=(2.0, 10.0),
+        xtol_mm=xtol,
+        structures_agent=mock_agent,
+    )
+    exact_t = 50.0 / allowable
+    assert result.max_stress_at_optimum_mpa <= allowable
+    assert exact_t <= result.optimal_thickness_mm <= exact_t + 4 * xtol

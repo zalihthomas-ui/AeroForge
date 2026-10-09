@@ -288,10 +288,13 @@ def optimize_bracket_thickness_for_min_mass(
         raise BracketOptimizerError(f"Root-finding with brentq failed: {exc}") from exc
 
     # Ensure optimal thickness is evaluated and recorded
-    res_opt = evaluate_thickness(opt_t)
+    evaluate_thickness(opt_t)
 
-    # Match best design point in evaluation history
-    best_point = min(evaluations, key=lambda p: abs(p.thickness_mm - opt_t))
+    # brentq converges to the constraint boundary from either side, so its root can sit
+    # (within xtol) on the infeasible side. Report the lightest evaluated design that
+    # actually satisfies the allowable; t_max is verified feasible above, so one exists.
+    feasible = [p for p in evaluations if p.hotspot_stress_mpa <= max_allowable_stress_mpa]
+    best_point = min(feasible, key=lambda p: p.mass_kg)
 
     return BracketOptimizationResult(
         optimal_thickness_mm=best_point.thickness_mm,
