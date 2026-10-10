@@ -18,20 +18,17 @@ import os
 import sys
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 import numpy as np
+from matplotlib.patches import Rectangle
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from agents.geometry.wing_structure import rib_flat_patterns  # noqa: E402
-from agents.manufacturing import (  # noqa: E402
-    BOMCostRates,
+from agents.geometry.wing_structure import rib_flat_patterns
+from agents.manufacturing import (
     ManufacturingAgent,
     StockSheetSpec,
-    generate_wing_bom,
-    nest_ribs,
 )
-from engineering.analysis.wing_campaign import (  # noqa: E402
+from engineering.analysis.wing_campaign import (
     CampaignRequirement,
     build_structure_cad,
     run_campaign,
@@ -110,7 +107,8 @@ def render_nesting_layout_image(plan, output_path: str) -> None:
                 ax.plot(edge_pts[:, 0], edge_pts[:, 1], color=color, linewidth=1.5)
 
         # Part label and dimensions
-        cx = p.x_mm + p.width_mm / 2.0
+        # label over the trailing-edge region: the lightening holes sit at 32 % and 48 % chord
+        cx = p.x_mm + p.width_mm * (0.22 if p.rotation_deg else 0.78)  # 180 deg puts the trailing edge on the left
         cy = p.y_mm + p.height_mm / 2.0
         ax.text(
             cx,
@@ -121,7 +119,7 @@ def render_nesting_layout_image(plan, output_path: str) -> None:
             fontweight="bold",
             ha="center",
             va="center",
-            bbox=dict(boxstyle="round,pad=0.2", facecolor="#0f172a", edgecolor=color, alpha=0.85, lw=1),
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "#0f172a", "edgecolor": color, "alpha": 0.85, "lw": 1},
         )
 
     ax.set_xlim(-20, stock.width_mm + 20)
@@ -130,7 +128,7 @@ def render_nesting_layout_image(plan, output_path: str) -> None:
 
     ax.set_title(
         f"AeroForge: 2D Wing Rib Nesting Layout (Sheet 1/{plan.total_sheet_count})\n"
-        f"Designed Wing: NACA {sheet.placements[0].face.bounding_box().size.X:.0f}mm chord | "
+        f"Designed wing ribs, largest chord {sheet.placements[0].face.bounding_box().size.X:.0f} mm | "
         f"Stock: {stock.width_mm:.0f} x {stock.height_mm:.0f} x {stock.thickness_mm:.1f} mm {stock.material} | "
         f"Parts: {plan.total_parts_nested} | Utilisation: {plan.overall_utilisation_percent:.1f}% | "
         f"Cut Length: {plan.total_cut_length_mm:.1f} mm | Laser Time: {plan.total_laser_cut_time_s:.1f} s",
