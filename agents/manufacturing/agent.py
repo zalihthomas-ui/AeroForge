@@ -1,50 +1,33 @@
-"""Manufacturing Agent: CNC manufacturability checks (mission doc Phase 6).
+"""Manufacturing Agent: CNC manufacturability, sheet nesting, and BOM cost estimation (mission doc Phase 6).
 
-First version. Applied to the actual Geometry Agent bracket component
-(agents/geometry/bracket.py's `build_bracket`, via its `hole_center_x_positions`
-helper — not a dedicated fixture), the same "check the real component, not
-a stand-in" discipline as the Structures Agent's evaluate_bracket. Every
-numeric threshold below is a real, documented machining convention, not an
-invented scoring heuristic with no ground truth.
-
-## Drill depth-to-diameter ratio
-
-Standard jobber-length twist drills (HSS or carbide) are commonly limited
-to roughly 5:1 depth-to-diameter for a single accurate pass — beyond that,
-drill wander and breakage risk increases enough that shops typically
-require peck-drilling cycles or dedicated deep-hole drilling tooling
-(gun drills, etc.), which cost more and take longer. ~5:1 is a widely
-cited CNC design-for-manufacturability rule of thumb (e.g. Protolabs' and
-similar CNC machining design guides use this figure), not a rigid
-physical/ISO standard — documented here rather than asserted blindly, and
-easy to override (`max_standard_drill_ratio`) if a shop's own capability
-differs. For the bracket, "depth" is thickness_mm: each hole is a
-through-hole drilled along the thickness axis.
-
-## Minimum hole-edge distance
-
-A hole drilled too close to the part's outer edge risks breakout (the
-drill or endmill exits through the side face instead of cleanly through
-the bottom) and leaves too little material around the hole for structural
-margin. agents/geometry/validation.py already enforces a geometric-
-validity minimum (MIN_EDGE_MARGIN_MM = 2mm) — but that only guarantees
-non-degenerate geometry (material exists at all), not that the part is
-comfortably manufacturable. This check instead computes the actual
-worst-case clearance: the minimum distance from any hole's edge to the
-nearest part edge, in either the length or width direction, and compares
-it against a commonly cited CNC design-guide minimum of 1x the hole
-diameter (e.g. Xometry/Protolabs machining design guides recommend at
-least one hole-diameter of clearance from a hole edge to a part edge or
-another feature) — a materially different, and typically much tighter,
-bar than the geometric-validity check.
+Covers:
+1. CNC bracket manufacturability (drill depth-to-diameter ratio, hole-edge clearance).
+2. Wing rib flat pattern nesting on stock sheet metal with DXF export, cut length, and laser time estimation.
+3. Full wing assembly Bill of Materials (BOM) with raw stock sizing, material and machine cost estimation,
+   and mass reconciliation.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from agents.geometry.bracket import hole_center_x_positions
 from agents.geometry.validation import GeometryValidationError, validate_bracket_parameters
+from agents.manufacturing.bom import (
+    BOMCostRates,
+    BillOfMaterials,
+    generate_wing_bom,
+)
+from agents.manufacturing.nesting import (
+    NestingPlan,
+    StockSheetSpec,
+    nest_ribs,
+)
+
+if TYPE_CHECKING:
+    from agents.geometry.wing_structure import WingStructure, WingStructureSpec
+    from build123d import Face
 
 # Source: widely used CNC machining design-for-manufacturability guidance
 # (e.g. Protolabs' CNC design guide) — a practical single-pass drilling
@@ -79,8 +62,16 @@ class CNCManufacturabilityResult:
     overall_manufacturable: bool
 
 
+@dataclass
+class WingManufacturingEvaluation:
+    """Consolidated manufacturing evaluation for a wing structure."""
+
+    nesting_plan: NestingPlan
+    bom: BillOfMaterials
+
+
 class ManufacturingAgent:
-    """Evaluates CNC manufacturability of the actual bracket geometry."""
+    """Evaluates manufacturability, sheet nesting, and cost for engineered components."""
 
     def evaluate_bracket_cnc(
         self,
@@ -92,35 +83,7 @@ class ManufacturingAgent:
         max_drill_ratio: float = DEFAULT_MAX_DRILL_RATIO,
         min_edge_margin_ratio: float = DEFAULT_MIN_EDGE_MARGIN_RATIO,
     ) -> CNCManufacturabilityResult:
-        """Evaluate CNC manufacturability of a bracket with these
-        parameters (same as agents/geometry/bracket.py's build_bracket).
-
-        Args:
-            length_mm, width_mm, thickness_mm, hole_diameter_mm,
-                hole_count: Same parameters and constraints as
-                build_bracket (validated with the same
-                agents/geometry/validation.validate_bracket_parameters —
-                there's no point checking manufacturability of geometry
-                that isn't even valid).
-            max_drill_ratio: Maximum standard single-pass drill
-                depth-to-diameter ratio. Defaults to the documented 5:1
-                rule of thumb; override if a specific shop's capability
-                differs.
-            min_edge_margin_ratio: Minimum required hole-edge-to-part-edge
-                clearance, as a multiple of hole_diameter_mm. Defaults to
-                the documented 1x rule of thumb.
-
-        Returns:
-            CNCManufacturabilityResult with both checks and their
-            real underlying numbers (not just pass/fail).
-
-        Raises:
-            ManufacturabilityError: If inputs are invalid (wrapping
-                agents.geometry.validation.GeometryValidationError, so
-                geometrically invalid brackets are rejected the same way
-                the Geometry Agent itself would reject them) or hole_count
-                is 0 (no holes to drill — nothing to evaluate here).
-        """
+        """Evaluate CNC manufacturability of a bracket with these parameters."""
         try:
             validate_bracket_parameters(length_mm, width_mm, thickness_mm, hole_diameter_mm, hole_count)
         except GeometryValidationError as exc:
@@ -151,10 +114,7 @@ class ManufacturingAgent:
     def _min_hole_edge_margin_mm(
         self, length_mm: float, width_mm: float, hole_diameter_mm: float, hole_count: int
     ) -> float:
-        """The worst-case (minimum) clearance from any hole's edge to the
-        nearest part edge, checking both the length direction (relevant
-        for the two outermost holes) and the width direction (the same
-        for every hole, since all holes are centered on the width axis)."""
+        """Worst-case clearance from any hole edge to nearest part edge."""
         hole_radius = hole_diameter_mm / 2
         width_margin = width_mm / 2 - hole_radius
 
@@ -164,3 +124,51 @@ class ManufacturingAgent:
             margins.append(distance_to_nearest_length_edge - hole_radius)
 
         return min(margins)
+
+    def nest_wing_ribs(
+        self,
+        rib_patterns_or_spec: dict[str, Face] | WingStructureSpec,
+        stock: StockSheetSpec = StockSheetSpec(),
+        feed_rate_mm_min: float = 3000.0,
+        both_wings: bool = True,
+    ) -> NestingPlan:
+        """Nest rib flat patterns onto stock sheets."""
+        return nest_ribs(
+            rib_patterns_or_spec,
+            stock=stock,
+            feed_rate_mm_min=feed_rate_mm_min,
+            both_wings=both_wings,
+        )
+
+    def generate_wing_bom(
+        self,
+        structure_or_spec: WingStructure | WingStructureSpec,
+        nesting_plan: NestingPlan | None = None,
+        rates: BOMCostRates = BOMCostRates(),
+    ) -> BillOfMaterials:
+        """Generate full Bill of Materials and manufacturing cost rollups."""
+        return generate_wing_bom(
+            structure_or_spec,
+            nesting_plan=nesting_plan,
+            rates=rates,
+        )
+
+    def evaluate_wing_manufacturing(
+        self,
+        structure_or_spec: WingStructure | WingStructureSpec,
+        stock: StockSheetSpec = StockSheetSpec(),
+        rates: BOMCostRates = BOMCostRates(),
+    ) -> WingManufacturingEvaluation:
+        """Full manufacturing pipeline: rib nesting + BOM cost estimation."""
+        nesting = self.nest_wing_ribs(
+            structure_or_spec if hasattr(structure_or_spec, "chord") else structure_or_spec.spec,  # type: ignore[union-attr]
+            stock=stock,
+            feed_rate_mm_min=rates.laser_feed_rate_mm_min,
+            both_wings=True,
+        )
+        bom = self.generate_wing_bom(
+            structure_or_spec,
+            nesting_plan=nesting,
+            rates=rates,
+        )
+        return WingManufacturingEvaluation(nesting_plan=nesting, bom=bom)

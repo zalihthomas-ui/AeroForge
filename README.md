@@ -99,10 +99,13 @@ optimized CAD" chains):
   numbers. Multi-parameter optimization (`bracket_optimizer_2d.py`) finds
   the minimum-mass thickness *and* hole diameter together via derivative-
   free constrained optimization (COBYLA), not just thickness alone.
-- **Manufacturing Agent** (`examples/bracket/manufacturability.py`): real
-  CNC design-for-manufacturability checks — drill depth-to-diameter ratio
-  and actual hole-to-edge clearance — on the actual bracket geometry,
-  each against a sourced, documented machining convention.
+- **Manufacturing Agent** (`examples/bracket/manufacturability.py`,
+  `examples/wing/manufacturing.py`): real CNC design-for-manufacturability checks
+  (drill depth-to-diameter ratio, hole-to-edge clearance on actual bracket geometry),
+  deterministic 2D sheet nesting of wing rib flat patterns on stock aluminium
+  (utilization %, multi-sheet DXF profile export, laser-cut length and cycle time),
+  and full wing assembly Bill of Materials (BOM) with raw stock mass, placeholder
+  manufacturing cost estimation, CSV export, and exact mass reconciliation.
 - **Flagship demo** (`engineering/analysis/wing_flagship.py`,
   `examples/wing/flagship_demo.py`): the actual mission doc §20
   demonstration — mission requirements (MTOW, cruise speed, span, safety
@@ -199,6 +202,7 @@ python examples/bracket/materialize.py # slow: chains optimize + materialize, ~1
 python examples/bracket/optimize_2d.py # slow: 2D COBYLA search, ~20-30 min
 python examples/wing/flagship_demo.py  # the original (2D-lift) flagship demo
 python examples/wing/structural_campaign.py  # v0.14: lifting line + loads + wing box + FE (~40 s)
+python examples/wing/manufacturing.py  # wing rib nesting + DXF export + BOM cost estimation
 ```
 
 ## Contributing

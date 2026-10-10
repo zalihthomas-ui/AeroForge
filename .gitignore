@@ -19,8 +19,10 @@ frontend/build/
 *.stl
 *.3mf
 *.brep
+*.dxf
 !examples/**/reference/*.step
 /design/
+examples/**/output/
 
 # Stray empty files occasionally dropped in the repo root by build123d/OCCT
 # or the Fortran runtime (XFOIL writing to an unopened default unit number)
