@@ -26,6 +26,13 @@ The full mission, philosophy, and long-term roadmap are documented in
 This repository is built **vertically**, one complete engineering loop at a
 time (see `docs/architecture/roadmap.md`).
 
+**New in v0.15 — the whole aircraft** (`python examples/aircraft/design_aircraft.py`, see
+[`docs/tutorials/whole-aircraft.md`](docs/tutorials/whole-aircraft.md)): the v0.14 wing grows a
+fuselage sized around its systems and a tail sized by tail-volume coefficients; mass & balance
+from every component; neutral point from vortex-lattice plus a fuselage increment; the wing is
+placed for a 10 % static margin and the aircraft is trimmed at cruise (α 2.7°, elevator −2.1°).
+Output: one labelled STEP assembly of the whole aircraft (84 parts).
+
 **New in v0.14 — virtual wing structural test campaign**
 (`python examples/wing/structural_campaign.py`, see
 [`docs/tutorials/structural-campaign.md`](docs/tutorials/structural-campaign.md)):

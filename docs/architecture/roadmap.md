@@ -1064,10 +1064,32 @@ closed form: equilibrium ~1e-8 %, tip deflection +3 %, cover stress < 3 %,
 first bending frequency -3 %, buckling factor inside the SS/clamped bound
 and mesh-converged < 1 %. 33 new tests.
 
-## Next milestone: v0.15 (candidates)
+## Milestone: v0.15 — whole aircraft: fuselage, tail, mass & balance, stability (DONE)
 
-Calibrated cover-buckling coefficient from the FE (or post-buckled skin
-design above limit load); stringer-stiffened covers; torsion/shear-centre
-offset from the quarter-chord lift; composite laminate (ply-level) option;
-inertia relief and a real aircraft weight budget; swept-wing aerodynamics
-(vortex lattice) to restore sweep.
+- `agents/geometry/fuselage_tail.py` — lofted elliptical fuselage (hollow 0.8 mm skin + ply formers),
+  NACA 0009 stabiliser / NACA 0010 fin split into fixed surfaces and elevator / rudder; labelled and
+  coloured for the STEP assembly exporter; thin-airfoil flap effectiveness.
+- `engineering/analysis/aircraft_layout.py` — tail-volume sizing (Raymer V_H 0.70, V_V 0.04), cabin
+  sized around component boxes, component-based mass & balance, neutral point (VLM + AeroBuildup
+  fuselage increment), wing placement by brentq for 10 % static margin, cruise trim (AeroBuildup
+  with elevator; VLM all-moving-tail cross-check), full-aircraft labelled assembly.
+- `examples/aircraft/design_aircraft.py`, `docs/tutorials/whole-aircraft.md`, 8 tests.
+- `cad.exporters.export_parts_step` fixed for primitive solids (Box/Cylinder).
+
+### Decision record
+
+- **The wing position, not the tail arm, balances the aircraft**: with a fixed tail-volume
+  coefficient the neutral point hardly moves with tail arm, so the tail arm is set by rule
+  (3 × MAC) and the wing is placed (x_LE 272.6 mm → SM 10.0 %).
+- **Design NP = VLM + fuselage increment**: AeroBuildup alone placed the NP aft of the VLM value
+  despite the fuselage (weaker empirical tail downwash), so only its fuselage increment is used.
+
+Result: 12.0 kg, payload capacity 5.33 kg, CG 46.6 % MAC, NP 412.4 mm, SM 10.0 %, trim α 2.71°,
+elevator −2.10° (VLM equivalent −0.23°), 84-part STEP assembly.
+
+## Next milestone: v0.16 (candidates)
+
+Dynamic stability (short period, phugoid, Dutch roll) from aerosandbox stability derivatives;
+lateral-directional sizing of the fin; propeller/slipstream and thrust-line effects; a real weight
+budget with component tolerances and CG envelope (forward/aft limits over payload/battery cases);
+tail structure (spars, hinges) and a fuselage FE check; landing gear or launch/recovery loads.

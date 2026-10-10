@@ -69,7 +69,11 @@ def export_parts_step(assembly: Compound, directory: str) -> list[str]:
         path = os.path.join(directory, f"{name}.step")
         # A shape still attached to its assembly tree fails to write on its own;
         # export a detached wrapper of the same geometry instead.
-        detached = type(shape)(shape.wrapped)
+        try:
+            detached = type(shape)(shape.wrapped)
+        except TypeError:
+            # primitives (Box, Cylinder, ...) take dimensions, not a TopoDS shape
+            detached = Part(shape.wrapped)
         detached.label, detached.color = shape.label, shape.color
         export_step(detached, path)
         written.append(path)
