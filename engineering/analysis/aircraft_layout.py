@@ -60,6 +60,10 @@ FOAM_DENSITY = 30.0  # EPS/XPS tail core
 PLY_DENSITY = 600.0  # light plywood formers
 
 
+BATTERY_LENGTH_MM = 200.0
+CABIN_START_MM = 110.0
+
+
 class AircraftLayoutError(RuntimeError):
     """Raised when the layout cannot meet its stability target."""
 
@@ -85,6 +89,18 @@ def default_components() -> list[Component]:
         Component("Servos", 0.20, 520.0, 30.0, None, "systems"),
         Component("Wiring & misc", 0.40, 420.0, 0.0, None, "systems"),
     ]
+
+
+BATTERY_PACK_GAP_MM = 10.0
+
+
+def balanced_components() -> list[Component]:
+    """Same systems as `default_components` but the battery split into two 1.4 kg packs (100 mm long) that sit
+    fore and aft of a CG-centred payload bay (positions set by `design_aircraft(payload_at_empty_cg=True)`)."""
+    comps = [c for c in default_components() if c.name != "Battery"]
+    comps.append(Component("Battery (fwd)", 1.40, 240.0, -10.0, (100.0, 90.0, 70.0), "energy"))
+    comps.append(Component("Battery (aft)", 1.40, 520.0, -10.0, (100.0, 90.0, 70.0), "energy"))
+    return comps
 
 
 @dataclass
@@ -130,6 +146,7 @@ class AircraftDesign:
     sm_vs_lh: list[tuple[float, float]] = field(default_factory=list)  # (wing x_LE, SM) sweep
     x_np_aerobuildup_mm: float = float("nan")
     x_np_aerobuildup_nofus_mm: float = float("nan")
+    dihedral_deg: float = 0.0  # set by the lateral-stability sizing (flight_dynamics.size_dihedral)
 
     @property
     def total_mass_kg(self) -> float:
@@ -169,7 +186,7 @@ def _cabin(components: list[Component], clearance_mm: float = 10.0, skin_mm: flo
     return w, h
 
 
-def _layout(campaign, components, l_h_mm, wing_x_le_mm, payload_x_mm, payload_box, mtow_kg):
+def _layout(campaign, components, l_h_mm, wing_x_le_mm, payload_x_mm, payload_box, mtow_kg, aft_extent_mm=0.0):
     a = campaign.aero
     b_mm = campaign.requirement.span_mm
     mac, _y_mac = wing_mac(a.root_chord_mm, a.tip_chord_mm, b_mm / 2)
@@ -177,7 +194,7 @@ def _layout(campaign, components, l_h_mm, wing_x_le_mm, payload_x_mm, payload_bo
     x_wing_qc = x_mac_le + 0.25 * mac
     tail = size_tail(campaign, l_h_mm, x_wing_qc)
     w_cab, h_cab = _cabin(components + [Component("Payload", 0, payload_x_mm, 0, payload_box)])
-    cabin_end = max(wing_x_le_mm + a.root_chord_mm, payload_x_mm + payload_box[0] / 2 + 20)
+    cabin_end = max(wing_x_le_mm + a.root_chord_mm, payload_x_mm + payload_box[0] / 2 + 20, aft_extent_mm + 20)
     tail_end = tail.x_htail_le_mm + tail.htail.root_chord_mm
     stations = fuselage_stations(w_cab, h_cab, 110.0, cabin_end, tail_end)
     wing_z = h_cab / 2.0  # high wing: wing lower surface ~ cabin top
@@ -222,19 +239,34 @@ def mass_balance(items: list[MassItem]) -> tuple[float, float, float]:
 
 # ---------------------------------------------------------------- aerodynamics (aerosandbox)
 
+AILERON_SPAN = (0.50, 0.95)  # fraction of semispan
+AILERON_HINGE_XC = 0.75
+RUDDER_DEFAULT_HINGE = 0.65
+
+
 def _asb_airplane(campaign, wing_x_le_mm, wing_z_mm, tail, stations, x_ref_mm, elevator_deg=0.0,
-                  htail_incidence_deg=0.0, with_fuselage=True):
+                  htail_incidence_deg=0.0, with_fuselage=True, aileron_deg=0.0, rudder_deg=0.0,
+                  include_htail=True, include_vtail=True, include_wing=True, dihedral_deg=0.0):
+    """aerosandbox model. Ailerons on 50-95 % semispan (25 % chord, antisymmetric: positive = right roll
+    command per aerosandbox convention), elevator 30 %, rudder 35 % chord."""
     import aerosandbox as asb
 
     a = campaign.aero
     mm = 1e-3
     b2 = campaign.requirement.span_mm / 2 * mm
     af = asb.Airfoil(f"naca{a.naca}")
-    wing = asb.Wing(name="Wing", symmetric=True, xsecs=[
-        asb.WingXSec(xyz_le=[wing_x_le_mm * mm, 0, wing_z_mm * mm], chord=a.root_chord_mm * mm,
-                     twist=campaign.requirement.alpha_deg * 0.0, airfoil=af),
-        asb.WingXSec(xyz_le=[wing_x_le_mm * mm, b2, wing_z_mm * mm], chord=a.tip_chord_mm * mm, airfoil=af),
-    ])
+
+    def chord_at(eta):
+        return (a.root_chord_mm + (a.tip_chord_mm - a.root_chord_mm) * eta) * mm
+
+    ail = [asb.ControlSurface(name="aileron", symmetric=False, hinge_point=AILERON_HINGE_XC,
+                              deflection=aileron_deg)]
+    xs = []
+    for eta, cs in ((0.0, []), (AILERON_SPAN[0], ail), (AILERON_SPAN[1], []), (1.0, [])):
+        z_eta = wing_z_mm * mm + eta * b2 * math.tan(math.radians(dihedral_deg))
+        xs.append(asb.WingXSec(xyz_le=[wing_x_le_mm * mm, eta * b2, z_eta], chord=chord_at(eta),
+                               airfoil=af, control_surfaces=cs))
+    wing = asb.Wing(name="Wing", symmetric=True, xsecs=xs)
     ht, vt = tail.htail, tail.vtail
     z_t = stations[-1].z_center_mm * mm
     elev = [asb.ControlSurface(name="elevator", symmetric=True, hinge_point=ht.hinge_xc, deflection=elevator_deg)]
@@ -245,9 +277,10 @@ def _asb_airplane(campaign, wing_x_le_mm, wing_z_mm, tail, stations, x_ref_mm, e
                      twist=htail_incidence_deg, airfoil=asb.Airfoil(f"naca{ht.naca}"), control_surfaces=elev),
     ])
     sweep = math.tan(math.radians(vt.sweep_le_deg))
+    rud = [asb.ControlSurface(name="rudder", symmetric=True, hinge_point=vt.hinge_xc, deflection=rudder_deg)]
     vtail = asb.Wing(name="VTail", symmetric=False, xsecs=[
         asb.WingXSec(xyz_le=[tail.x_vtail_le_mm * mm, 0, z_t], chord=vt.root_chord_mm * mm,
-                     airfoil=asb.Airfoil(f"naca{vt.naca}")),
+                     airfoil=asb.Airfoil(f"naca{vt.naca}"), control_surfaces=rud),
         asb.WingXSec(xyz_le=[(tail.x_vtail_le_mm + vt.span_mm * sweep) * mm, 0, z_t + vt.span_mm * mm],
                      chord=vt.tip_chord_mm * mm, airfoil=asb.Airfoil(f"naca{vt.naca}")),
     ])
@@ -257,7 +290,8 @@ def _asb_airplane(campaign, wing_x_le_mm, wing_z_mm, tail, stations, x_ref_mm, e
             asb.FuselageXSec(xyz_c=[s.x_mm * mm, 0, s.z_center_mm * mm], width=s.width_mm * mm,
                              height=s.height_mm * mm) for s in stations])]
     mac, _ = wing_mac(a.root_chord_mm, a.tip_chord_mm, campaign.requirement.span_mm / 2)
-    return asb.Airplane(name="AeroForge UAV", xyz_ref=[x_ref_mm * mm, 0, 0], wings=[wing, htail, vtail],
+    wings = ([wing] if include_wing else []) + ([htail] if include_htail else []) + ([vtail] if include_vtail else [])
+    return asb.Airplane(name="AeroForge UAV", xyz_ref=[x_ref_mm * mm, 0, 0], wings=wings,
                         fuselages=fuselages, s_ref=a.lifting_line.area_m2, c_ref=mac * mm,
                         b_ref=2 * b2)
 
@@ -319,7 +353,8 @@ def trim(campaign, wing_x_le_mm, wing_z_mm, tail, stations, x_cg_mm, mass_kg, v)
 def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float],
                     components: list[Component] | None = None, l_h_over_mac: float = 3.0,
                     payload_x_mm: float = 470.0, payload_box=(180.0, 100.0, 100.0),
-                    sm_target: float = 0.10, wing_x_bounds=(200.0, 600.0)) -> AircraftDesign:
+                    sm_target: float = 0.10, wing_x_bounds=(50.0, 600.0),
+                    payload_at_empty_cg: bool = False) -> AircraftDesign:
     """Grow the aircraft around the campaign wing and place the wing for the target static margin.
 
     The empennage is sized by the tail-volume coefficients at a tail arm of `l_h_over_mac` x MAC
@@ -335,20 +370,42 @@ def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float]
     l_h = l_h_over_mac * mac0
     history: list[tuple[float, float]] = []
     cache: dict[float, dict] = {}
+    _aft_extent: dict[str, float] = {}
+    if payload_at_empty_cg and components is None:
+        comps = balanced_components()
 
     def evaluate(x_le):
         key = round(float(x_le), 3)
         if key in cache:
             return cache[key]
         mac, x_mac_le, tail, stations, wing_z = _layout(campaign, comps, l_h, x_le, payload_x_mm, payload_box,
-                                                        mtow)
+                                                        mtow, aft_extent_mm=_aft_extent.get("x", 0.0))
         items = [MassItem(c.name, c.mass_kg, c.x_mm, c.z_mm, c.group) for c in comps]
         items += _structure_masses(campaign, x_le, wing_z, tail, stations, structure_masses)
         empty = sum(i.mass_kg for i in items)
         payload = mtow - empty
         if payload <= 0:
             raise AircraftLayoutError(f"no payload left: empty mass {empty:.2f} kg >= MTOW {mtow} kg")
-        items.append(MassItem("Payload", payload, payload_x_mm, 0.0, "payload"))
+        x_pay = payload_x_mm
+        overlap = False
+        if payload_at_empty_cg:
+            # Real-world balancing: the payload bay is centred on the CG of everything else and the two battery
+            # packs sit symmetrically fore and aft of it, so the CG does not move whether the payload is loaded
+            # or not (and battery + payload together do not shift it either).
+            packs = [i for i in items if i.name.startswith("Battery")]
+            others = [i for i in items if not i.name.startswith("Battery")]
+            x_pay = sum(i.mass_kg * i.x_mm for i in others) / sum(i.mass_kg for i in others)
+            off = 0.5 * payload_box[0] + 50.0 + BATTERY_PACK_GAP_MM
+            for pk, sgn in zip(sorted(packs, key=lambda i: i.name, reverse=True), (-1.0, 1.0)):
+                pk.x_mm = x_pay + sgn * off  # "Battery (fwd)" forward, "Battery (aft)" aft
+            overlap = x_pay - off - 50.0 < CABIN_START_MM
+        items.append(MassItem("Payload", payload, x_pay, 0.0, "payload"))
+        if payload_at_empty_cg:
+            aft = max(i.x_mm + 50.0 for i in items if i.name.startswith("Battery"))
+            if aft + 20 > stations[3].x_mm + 1e-6 and _aft_extent.get("x") != aft:
+                _aft_extent["x"] = aft
+                cache.pop(key, None)
+                return evaluate(x_le)
         m, x_cg, z_cg = mass_balance(items)
         x_np, x_vlm, x_ab, x_ab_nofus = neutral_points(campaign, x_le, wing_z, tail, stations, x_cg,
                                                        campaign.requirement.alpha_deg, v)
@@ -356,7 +413,7 @@ def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float]
         history.append((float(x_le), sm))
         cache[key] = {"mac": mac, "x_mac_le": x_mac_le, "tail": tail, "stations": stations, "wing_z": wing_z, "items": items,
                           "m": m, "x_cg": x_cg, "z_cg": z_cg, "x_np": x_np, "x_vlm": x_vlm, "x_ab": x_ab, "x_ab_nofus": x_ab_nofus,
-                          "sm": sm, "payload": payload}
+                          "sm": sm, "payload": payload, "overlap": overlap}
         return cache[key]
 
     lo, hi = wing_x_bounds
@@ -368,6 +425,8 @@ def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float]
     for x in np.linspace(lo, hi, 9):  # SM sweep for reporting / plots
         evaluate(x)
     r = evaluate(x_le)
+    if r["overlap"]:
+        raise AircraftLayoutError("payload bay at the empty CG overlaps the battery at the solved wing position")
     al, de, de_vlm, cl = trim(campaign, x_le, r["wing_z"], r["tail"], r["stations"], r["x_cg"], r["m"], v)
     d = AircraftDesign(
         campaign=campaign, wing_x_le_mm=float(x_le), wing_z_mm=r["wing_z"], tail=r["tail"],
@@ -381,11 +440,30 @@ def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float]
     return d
 
 
+def _with_dihedral(wing_asm, dihedral_deg: float):
+    """Rotate starboard (+y) / port (-y) wing leaves about the root chord line (x axis) by +/- dihedral."""
+    from build123d import Compound, Rot
+
+    if abs(dihedral_deg) < 1e-9:
+        return wing_asm
+    groups = []
+    for grp in wing_asm.children:
+        leaves = []
+        for leaf in grp.children:
+            sgn = 1.0 if leaf.label.endswith("_Stbd") else -1.0
+            moved = Rot(sgn * dihedral_deg, 0, 0) * leaf
+            moved.label, moved.color = leaf.label, leaf.color
+            leaves.append(moved)
+        groups.append(Compound(children=leaves, label=grp.label))
+    return Compound(children=groups, label=wing_asm.label)
+
+
 def build_aircraft_assembly(design: AircraftDesign, wing_structure, component_boxes: bool = True):
     """Labelled full-aircraft compound: Wing (v0.14 structure), Fuselage, HorizontalTail, VerticalTail, Systems."""
     from build123d import Box, Color, Compound, Cylinder, Pos, Rot
 
-    wing = Pos(design.wing_x_le_mm, 0, design.wing_z_mm) * wing_structure.assembly(label="Wing")
+    wing = Pos(design.wing_x_le_mm, 0, design.wing_z_mm) * _with_dihedral(wing_structure.assembly(label="Wing"),
+                                                                         design.dihedral_deg)
     fus = build_fuselage(design.stations, former_x_mm=_former_x(design.stations))
     z_t = design.stations[-1].z_center_mm
     ht = build_htail(design.tail.htail, design.tail.x_htail_le_mm, z_t)
@@ -403,7 +481,8 @@ def build_aircraft_assembly(design: AircraftDesign, wing_structure, component_bo
             elif it.name == "Motor":
                 p = Pos(it.x_mm, 0, 0) * Rot(0, 90, 0) * Cylinder(28.0, 55.0)
             else:
-                box = {"ESC": (70, 40, 20), "Battery": (200, 90, 70), "Avionics": (100, 80, 40),
+                box = {"ESC": (70, 40, 20), "Battery": (200, 90, 70), "Battery (fwd)": (100, 90, 70),
+                       "Battery (aft)": (100, 90, 70), "Avionics": (100, 80, 40),
                        "Payload": (180, 100, 100)}.get(it.name)
                 if box is None:
                     continue

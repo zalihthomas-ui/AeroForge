@@ -46,6 +46,23 @@ def export_step_assembly(assembly: Compound, path: str) -> None:
     export_step(assembly, path)
 
 
+def world_shape(shape: Shape) -> Shape:
+    """A detached copy of an assembly leaf placed in world coordinates.
+
+    A leaf inside a moved sub-assembly (``Pos(...) * Compound(children=...)``) keeps its *local* location;
+    its world placement is ``global_location`` (parent locations composed). Use this before measuring or
+    exporting a leaf on its own, otherwise parts of moved sub-assemblies come out at their local origin.
+    """
+    placed = shape.located(shape.global_location)
+    try:
+        detached = type(shape)(placed.wrapped)
+    except TypeError:
+        # primitives (Box, Cylinder, ...) take dimensions, not a TopoDS shape
+        detached = Part(placed.wrapped)
+    detached.label, detached.color = shape.label, shape.color
+    return detached
+
+
 def export_parts_step(assembly: Compound, directory: str) -> list[str]:
     """Write every leaf solid of a labelled assembly to its own STEP file.
 
@@ -69,11 +86,7 @@ def export_parts_step(assembly: Compound, directory: str) -> list[str]:
         path = os.path.join(directory, f"{name}.step")
         # A shape still attached to its assembly tree fails to write on its own;
         # export a detached wrapper of the same geometry instead.
-        try:
-            detached = type(shape)(shape.wrapped)
-        except TypeError:
-            # primitives (Box, Cylinder, ...) take dimensions, not a TopoDS shape
-            detached = Part(shape.wrapped)
+        detached = world_shape(shape)
         detached.label, detached.color = shape.label, shape.color
         export_step(detached, path)
         written.append(path)

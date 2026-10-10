@@ -123,3 +123,17 @@ def test_export_parts_step_handles_primitive_solids(tmp_path):
     b.label, c.label = "Block", "Pin"
     paths = export_parts_step(Compound(children=[b, c], label="Kit"), str(tmp_path))
     assert sorted(p.split("\\")[-1].split("/")[-1] for p in paths) == ["Block.step", "Pin.step"]
+
+
+def test_parts_of_moved_subassemblies_export_in_world_coordinates(tmp_path):
+    from build123d import Box, Compound, Pos, import_step
+
+    from cad.exporters import export_parts_step, world_shape
+
+    leaf = Box(10, 10, 10)
+    leaf.label = "Leaf"
+    top = Compound(children=[Pos(250, 0, 0) * Compound(children=[leaf], label="Sub")], label="Top")
+    inner = top.children[0].children[0]
+    assert world_shape(inner).center().X == pytest.approx(250.0)
+    (path,) = export_parts_step(top, str(tmp_path))
+    assert import_step(path).center().X == pytest.approx(250.0)
