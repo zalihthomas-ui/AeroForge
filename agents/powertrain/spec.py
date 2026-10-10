@@ -7,7 +7,8 @@ drawn.
 
 Frame and conventions (all lengths in mm unless a name says otherwise):
 * Z along the crankshaft axis, from the front (timing end, z=0) to the
-  flywheel; X horizontal, Y up. The crank rotates about +Z.
+  flywheel; X horizontal, Y up. Crank angles are measured from +Y towards +X, so
+  increasing ``theta`` is a rotation about -Z (clockwise seen from the front, +Z towards the viewer).
 * Crank angle ``theta`` [deg] is the rotation of the crankshaft from the
   reference position; one 4-stroke cycle is 720 deg.
 * Each cylinder axis lies in the XY plane at ``bank_angle_deg`` from vertical
@@ -58,10 +59,13 @@ class EngineSpec:
     bore_spacing_mm: float = 100.0  # axial distance between cylinders in one bank
     bank_offset_mm: float = 18.0  # axial stagger of the left bank (split-pin pairs share a throw)
     firing_order: tuple[int, ...] = (1, 2, 3, 4, 5, 6)
-    # masses for dynamics (kg): piston + rings + pin + small-end share of the rod
-    reciprocating_mass_kg: float = 0.55
-    rod_mass_kg: float = 0.55
-    rod_big_end_fraction: float = 0.67  # share of rod mass treated as rotating
+    # masses for dynamics (kg), measured from the parametric CAD (agents/powertrain/v6_cad.py:
+    # part_masses_kg / rod_small_end_fraction, volume x density): piston 0.4222 + gudgeon pin 0.1359,
+    # steel rod 0.4440 with its CG giving a 0.638 big-end share. They replace the initial
+    # assumptions (0.55 / 0.55 / 0.67) so the dynamics run on the geometry that is drawn.
+    reciprocating_mass_kg: float = 0.5581  # piston + gudgeon pin (rings not modelled)
+    rod_mass_kg: float = 0.4440
+    rod_big_end_fraction: float = 0.6377  # share of rod mass treated as rotating
     cylinders: tuple[Cylinder, ...] = field(default=(), compare=False)
 
     def __post_init__(self) -> None:

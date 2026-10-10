@@ -1,6 +1,5 @@
 """V6 parametric CAD: geometry derived from EngineSpec, exact kinematics, assembly, clash checks."""
 
-import math
 
 import numpy as np
 import pytest
@@ -152,3 +151,24 @@ def test_assembly_labels_and_step_export(model, tmp_path):
     assert path.stat().st_size > 10_000
     files = export_parts_step(asm, str(tmp_path / "parts"))
     assert len(files) == 1 + 2 + 2 + 1 + 1 + 1 + 6 * 3
+
+
+def test_spec_dynamics_masses_match_the_cad():
+    """The dynamics run on the masses of the parts that are drawn (spec updated from the CAD)."""
+    from agents.powertrain.spec import EngineSpec
+    from agents.powertrain.v6_cad import (
+        build_v6,
+        part_masses_kg,
+        rod_small_end_fraction,
+    )
+    from engineering.analysis.engine_dynamics import (
+        reciprocating_mass_kg as analysis_recip,
+    )
+
+    spec = EngineSpec()
+    model = build_v6(spec)
+    m = part_masses_kg(model)
+    assert spec.reciprocating_mass_kg == pytest.approx(m["piston"] + m["gudgeon_pin"], rel=1e-3)
+    assert spec.rod_mass_kg == pytest.approx(m["rod"], rel=1e-3)
+    assert 1.0 - spec.rod_big_end_fraction == pytest.approx(rod_small_end_fraction(model), rel=1e-3)
+    assert analysis_recip(spec) == pytest.approx(m["piston"] + m["gudgeon_pin"] + m["rod"] * rod_small_end_fraction(model), rel=1e-3)

@@ -34,6 +34,7 @@ represented by their grooves only.
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field
 
@@ -360,7 +361,7 @@ def build_block(spec: EngineSpec, p: V6CadProportions, mains: list[float]) -> Pa
     # crankcase cavity between the main-bearing bulkheads, open at the bottom for the pan
     bulk = [(zm - p.main_journal_width / 2 + p.bulkhead_axial_gap, zm + p.main_journal_width / 2 - p.bulkhead_axial_gap)
             for zm in mains]
-    for (_, a), (b, _) in zip(bulk[:-1], bulk[1:]):
+    for (_, a), (b, _) in itertools.pairwise(bulk):
         block -= _along_z(p.crankcase_cavity_radius, a, b)
     block -= _along_z(p.main_journal_dia / 2, zf - 1, zr + 1)
     for c in spec.cylinders:
@@ -458,7 +459,7 @@ def assembly(model: V6Model, theta_deg: float = 0.0, label: str = "Engine") -> C
 
 def part_masses_kg(model: V6Model) -> dict[str, float]:
     """CAD volume x density for the moving parts (steel crank/rods/pins/flywheel, Al pistons)."""
-    v = lambda s: s.volume * 1e-9  # noqa: E731  mm^3 -> m^3
+    v = lambda s: s.volume * 1e-9
     return {
         "crankshaft": v(model.crankshaft) * STEEL_DENSITY,
         "flywheel": v(model.flywheel) * STEEL_DENSITY,
