@@ -1,11 +1,12 @@
 """Manufacturing demonstration: Wing rib sheet nesting, DXF generation, and BOM cost estimation.
 
 Demonstrates:
-1. Rib flat pattern extraction (2D cutting profiles with lightening holes) from WingStructureSpec.
-2. Deterministic 2D sheet nesting onto stock aluminium sheet (1000 x 500 x 1 mm, 5 mm clearance).
-3. Multi-sheet DXF profile export for CNC laser/water-jet cutters.
-4. Full wing assembly Bill of Materials (BOM) with raw stock mass, machining cycle times, and cost estimation.
-5. Export of BOM to CSV and visual rendering of the nested sheet layout to PNG.
+1. Sizing the real designed campaign wing via `engineering.analysis.wing_campaign.run_campaign`.
+2. Extracting rib flat patterns (2D cutting profiles with lightening holes, 14 ribs total for 6-bay wing).
+3. Deterministic 2D sheet nesting onto stock aluminium sheet (1000 x 500 x 1 mm, 5 mm clearance).
+4. Multi-sheet DXF profile export for CNC laser/water-jet cutters.
+5. Full wing assembly Bill of Materials (BOM) with 68 parts, raw stock mass, machining cycle times, and cost estimation.
+6. Export of BOM to CSV and visual CAD rendering of the nested sheet layout to PNG.
 
 Run from repo root:
     python examples/wing/manufacturing.py
@@ -22,17 +23,18 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from agents.geometry.wing_structure import (  # noqa: E402
-    WingStructureSpec,
-    build_wing_structure,
-    rib_flat_patterns,
-)
+from agents.geometry.wing_structure import rib_flat_patterns  # noqa: E402
 from agents.manufacturing import (  # noqa: E402
     BOMCostRates,
     ManufacturingAgent,
     StockSheetSpec,
     generate_wing_bom,
     nest_ribs,
+)
+from engineering.analysis.wing_campaign import (  # noqa: E402
+    CampaignRequirement,
+    build_structure_cad,
+    run_campaign,
 )
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
@@ -76,7 +78,11 @@ def render_nesting_layout_image(plan, output_path: str) -> None:
     ax.add_patch(margin_rect)
 
     # Palette for parts
-    colors = ["#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa", "#2dd4bf", "#f87171", "#c084fc", "#fb923c", "#34d399"]
+    colors = [
+        "#38bdf8", "#4ade80", "#fbbf24", "#f472b6", "#a78bfa",
+        "#2dd4bf", "#f87171", "#c084fc", "#fb923c", "#34d399",
+        "#e879f9", "#38bdf8", "#facc15", "#4ade80",
+    ]
 
     for i, p in enumerate(sheet.placements):
         color = colors[i % len(colors)]
@@ -111,7 +117,7 @@ def render_nesting_layout_image(plan, output_path: str) -> None:
             cy,
             f"{p.part_id}\n{p.width_mm:.0f}x{p.height_mm:.0f} mm",
             color="#f8fafc",
-            fontsize=8,
+            fontsize=7,
             fontweight="bold",
             ha="center",
             va="center",
@@ -124,6 +130,7 @@ def render_nesting_layout_image(plan, output_path: str) -> None:
 
     ax.set_title(
         f"AeroForge: 2D Wing Rib Nesting Layout (Sheet 1/{plan.total_sheet_count})\n"
+        f"Designed Wing: NACA {sheet.placements[0].face.bounding_box().size.X:.0f}mm chord | "
         f"Stock: {stock.width_mm:.0f} x {stock.height_mm:.0f} x {stock.thickness_mm:.1f} mm {stock.material} | "
         f"Parts: {plan.total_parts_nested} | Utilisation: {plan.overall_utilisation_percent:.1f}% | "
         f"Cut Length: {plan.total_cut_length_mm:.1f} mm | Laser Time: {plan.total_laser_cut_time_s:.1f} s",
@@ -150,28 +157,18 @@ def main() -> None:
     print("AEROFORGE MANUFACTURING: WING RIB NESTING & BOM COST ESTIMATION")
     print("=" * 80)
 
-    # 1. Define baseline wing structure specification
-    spec = WingStructureSpec(
-        semispan_mm=1000.0,
-        root_chord_mm=250.0,
-        tip_chord_mm=150.0,
-        naca="2412",
-        bay_edges_mm=[0.0, 250.0, 500.0, 750.0, 1000.0],
-        t_cap_mm=[2.0, 1.8, 1.5, 1.2],
-        t_web_mm=[1.5, 1.5, 1.2, 1.0],
-        front_spar_xc=0.20,
-        rear_spar_xc=0.60,
-        rib_thickness_mm=1.0,
-        rib_lightening_holes=True,
-        skin_thickness_mm=0.5,
-        te_skin_end_xc=0.95,
-    )
+    # 1. Run campaign sizing to get the real designed wing structure
+    print("\n[1] Running Wing Sizing Campaign (Lifting-Line Aero + Load Envelope + Wing Box Sizing)...")
+    campaign_res = run_campaign(CampaignRequirement(), run_fe=False)
+    structure = build_structure_cad(campaign_res)
+    spec = structure.spec
 
-    print("\n[1] Wing Structure Configuration:")
     print(f"  - Semispan:          {spec.semispan_mm:.1f} mm (Full span: {2*spec.semispan_mm:.1f} mm)")
     print(f"  - Root / Tip Chord:  {spec.root_chord_mm:.1f} mm / {spec.tip_chord_mm:.1f} mm")
     print(f"  - Airfoil Section:   NACA {spec.naca}")
     print(f"  - Bay Stations:      {spec.bay_edges_mm} mm ({len(spec.bay_edges_mm)-1} bays, {len(spec.bay_edges_mm)} rib stations)")
+    print(f"  - Sized Box Mass:    {campaign_res.sizing.mass_kg:.3f} kg (FE box model)")
+    print(f"  - Total Solid CAD:   {sum(structure.masses_kg().values()):.3f} kg (all 68 assembly solids)")
 
     # 2. Extract 2D cutting flat patterns
     print("\n[2] Extracting Rib Flat Patterns (2D profiles + lightening holes)...")
@@ -194,11 +191,11 @@ def main() -> None:
     )
     print(f"\n[3] Nesting Ribs onto Stock Sheet ({stock.width_mm:.0f} x {stock.height_mm:.0f} x {stock.thickness_mm:.1f} mm {stock.material})...")
     agent = ManufacturingAgent()
-    eval_res = agent.evaluate_wing_manufacturing(spec, stock=stock)
+    eval_res = agent.evaluate_wing_manufacturing(structure, stock=stock)
     nesting_plan = eval_res.nesting_plan
 
     print(f"  - Total Sheets Required: {nesting_plan.total_sheet_count}")
-    print(f"  - Total Nested Parts:    {nesting_plan.total_parts_nested} (5 Stbd + 5 Port ribs)")
+    print(f"  - Total Nested Parts:    {nesting_plan.total_parts_nested} (7 Stbd + 7 Port ribs)")
     print(f"  - Net Part Area:         {nesting_plan.total_part_area_mm2:.1f} mm2")
     print(f"  - Stock Sheet Area:      {nesting_plan.total_stock_area_mm2:.1f} mm2")
     print(f"  - Material Utilisation:  {nesting_plan.overall_utilisation_percent:.2f}%")
@@ -227,7 +224,6 @@ def main() -> None:
     print(f"\n  - Saved BOM CSV: {csv_path} ({len(bom.items)} items)")
 
     # 7. Mass Reconciliation
-    structure = build_wing_structure(spec)
     expected_mass = sum(structure.masses_kg().values())
     diff_kg = abs(bom.total_part_mass_kg - expected_mass)
     print("\n[7] Mass Reconciliation Verification:")
