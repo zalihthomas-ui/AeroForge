@@ -136,7 +136,7 @@ tests/           unit tests, mirrored by subsystem
 docs/            architecture notes, tutorials, research
 ```
 
-## V6 engine (powertrain, in progress)
+## V6 engine (powertrain)
 
 `python examples/engine/simulate.py` takes one `EngineSpec` (3.0 L 60 deg V6, split-pin crankshaft,
 even 120 deg firing; `agents/powertrain/spec.py`) through:
@@ -144,14 +144,21 @@ even 120 deg firing; `agents/powertrain/spec.py`) through:
 | Step | Module | Result for the default engine |
 |---|---|---|
 | Cycle | `engineering/analysis/engine_cycle.py`: single-zone crank-angle model, Wiebe heat release, Woschni wall heat transfer, gamma(T), MBT spark per speed, Barnes-Moss friction | 255 N m @ 3500 rpm, 144 kW @ 6500 rpm; gross indicated efficiency 38-43 %; peak pressure 12-17 deg ATDC |
-| Dynamics | `engineering/analysis/engine_dynamics.py`: exact slider-crank, gas + inertia forces, crank torque, shaking forces/moments by order, flywheel | zero shaking forces, primary/secondary rocking couples 1733 / 487 N m @ 6000 rpm (the known 60 deg V6 trait) |
-| Con rod | `engineering/analysis/engine_conrod.py`: worst-case loads from the model, Johnson-Euler buckling (in/out of plane), Goodman fatigue, sizing | 33.9 kN compression, 20.1 kN tension @ 7000 rpm; sized shank: buckling SF 3.0 (governs), fatigue SF 1.6 |
+| Dynamics | `engineering/analysis/engine_dynamics.py`: exact slider-crank, gas + inertia forces, crank torque, shaking forces/moments by order, flywheel | zero shaking forces, primary/secondary rocking couples 1703 / 479 N m @ 6000 rpm (the known 60 deg V6 trait) |
+| Con rod | `engineering/analysis/engine_conrod.py`: worst-case loads from the model, Johnson-Euler buckling (in/out of plane), Goodman fatigue, sizing | 34.0 kN compression, 19.7 kN tension @ 7000 rpm; sized shank: buckling SF 3.0 (governs), fatigue SF 1.6 |
 
 Validation lives in `tests/powertrain/`: ideal Otto efficiency in the adiabatic limit, energy balance,
 single-cylinder primary/secondary forces vs theory, an inline six free of primary/secondary forces and
 moments, mean gas torque = cycle work, con-rod tension = m r w^2 (1 + lambda). Simplifications (single zone,
 no gas-exchange or knock model, placeholder volumetric-efficiency curve, shank-only rod check) are stated
-in each module's docstring. The matching parametric CAD is `agents/powertrain/v6_cad.py`.
+in each module's docstring.
+
+The parametric CAD (`agents/powertrain/v6_cad.py`, `python examples/engine/cad.py`) builds block, heads, split-pin
+crankshaft with counterweights, pistons, gudgeon pins, rods, oil pan and flywheel from the same `EngineSpec`, poses
+every moving part at any crank angle with the exact slider-crank kinematics, and exports a named STEP assembly. Its
+chamber gives CR 10.500 (= spec); piston skirts clear the counterweights by 7.0 mm at every BDC and the rods clear the
+block by 14.3 mm over a full 720 deg sweep. The dynamics use the CAD-measured masses (piston + pin 0.558 kg, rod
+0.444 kg, big-end share 0.638), checked by a test, instead of the initial assumptions.
 
 ## CAD outputs and using them in SolidWorks / Fusion / CATIA
 
