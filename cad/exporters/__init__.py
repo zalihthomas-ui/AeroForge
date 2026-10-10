@@ -53,12 +53,15 @@ def world_shape(shape: Shape) -> Shape:
     its world placement is ``global_location`` (parent locations composed). Use this before measuring or
     exporting a leaf on its own, otherwise parts of moved sub-assemblies come out at their local origin.
     """
-    placed = shape.located(shape.global_location)
+    # shape.wrapped already carries the leaf's own location; apply the parents' composed transform to the raw
+    # OCC shape. (shape.located(...) would copy the attached node -- with its whole assembly tree.)
+    parent = shape.parent
+    wrapped = shape.wrapped.Moved(parent.global_location.wrapped) if parent is not None else shape.wrapped
     try:
-        detached = type(shape)(placed.wrapped)
+        detached = type(shape)(wrapped)
     except TypeError:
         # primitives (Box, Cylinder, ...) take dimensions, not a TopoDS shape
-        detached = Part(placed.wrapped)
+        detached = Part(wrapped)
     detached.label, detached.color = shape.label, shape.color
     return detached
 

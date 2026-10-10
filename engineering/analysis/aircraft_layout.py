@@ -147,6 +147,7 @@ class AircraftDesign:
     x_np_aerobuildup_mm: float = float("nan")
     x_np_aerobuildup_nofus_mm: float = float("nan")
     dihedral_deg: float = 0.0  # set by the lateral-stability sizing (flight_dynamics.size_dihedral)
+    tail_structure: object = None  # v0.16 built-up tails (tail_structure.TailStructureResult) when designed
 
     @property
     def total_mass_kg(self) -> float:
@@ -201,7 +202,7 @@ def _layout(campaign, components, l_h_mm, wing_x_le_mm, payload_x_mm, payload_bo
     return mac, x_mac_le, tail, stations, wing_z
 
 
-def _structure_masses(campaign, wing_x_le_mm, wing_z_mm, tail, stations, structure_masses):
+def _structure_masses(campaign, wing_x_le_mm, wing_z_mm, tail, stations, structure_masses, tail_masses=None):
     items = []
     a = campaign.aero
     # wing structure from the v0.14 CAD (both halves): centroid ~ 40 % chord at the MAC
@@ -217,6 +218,11 @@ def _structure_masses(campaign, wing_x_le_mm, wing_z_mm, tail, stations, structu
                           float(np.mean([f.center().X for f in formers])), 0.0, "structure"))
     for name, geo, x_le, z in (("Horizontal tail", tail.htail, tail.x_htail_le_mm, stations[-1].z_center_mm),
                                ("Vertical tail", tail.vtail, tail.x_vtail_le_mm, stations[-1].z_center_mm)):
+        if tail_masses and name in tail_masses:
+            # built-up tail measured from its CAD: (mass, centroid x from the surface LE, centroid z offset)
+            m_t, dx, dz = tail_masses[name]
+            items.append(MassItem(name, m_t, x_le + dx, z + dz, "structure"))
+            continue
         n_sides = 2 if name.startswith("Horizontal") else 1
         area_m2 = geo.area_mm2 * n_sides * 1e-6
         t_mean = int(geo.naca[-2:]) / 100.0 * 0.69 * geo.mac_mm * 1e-3  # NACA section area ~0.685 t c
@@ -354,7 +360,8 @@ def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float]
                     components: list[Component] | None = None, l_h_over_mac: float = 3.0,
                     payload_x_mm: float = 470.0, payload_box=(180.0, 100.0, 100.0),
                     sm_target: float = 0.10, wing_x_bounds=(50.0, 600.0),
-                    payload_at_empty_cg: bool = False) -> AircraftDesign:
+                    payload_at_empty_cg: bool = False,
+                    tail_masses: dict[str, tuple[float, float, float]] | None = None) -> AircraftDesign:
     """Grow the aircraft around the campaign wing and place the wing for the target static margin.
 
     The empennage is sized by the tail-volume coefficients at a tail arm of `l_h_over_mac` x MAC
@@ -381,7 +388,7 @@ def design_aircraft(campaign: CampaignResult, structure_masses: dict[str, float]
         mac, x_mac_le, tail, stations, wing_z = _layout(campaign, comps, l_h, x_le, payload_x_mm, payload_box,
                                                         mtow, aft_extent_mm=_aft_extent.get("x", 0.0))
         items = [MassItem(c.name, c.mass_kg, c.x_mm, c.z_mm, c.group) for c in comps]
-        items += _structure_masses(campaign, x_le, wing_z, tail, stations, structure_masses)
+        items += _structure_masses(campaign, x_le, wing_z, tail, stations, structure_masses, tail_masses)
         empty = sum(i.mass_kg for i in items)
         payload = mtow - empty
         if payload <= 0:
@@ -444,6 +451,8 @@ def _with_dihedral(wing_asm, dihedral_deg: float):
     """Rotate starboard (+y) / port (-y) wing leaves about the root chord line (x axis) by +/- dihedral."""
     from build123d import Compound, Rot
 
+    from cad.exporters import world_shape
+
     if abs(dihedral_deg) < 1e-9:
         return wing_asm
     groups = []
@@ -451,7 +460,8 @@ def _with_dihedral(wing_asm, dihedral_deg: float):
         leaves = []
         for leaf in grp.children:
             sgn = 1.0 if leaf.label.endswith("_Stbd") else -1.0
-            moved = Rot(sgn * dihedral_deg, 0, 0) * leaf
+            # detach first: moving a leaf that still has a parent deep-copies the whole assembly tree
+            moved = Rot(sgn * dihedral_deg, 0, 0) * world_shape(leaf)
             moved.label, moved.color = leaf.label, leaf.color
             leaves.append(moved)
         groups.append(Compound(children=leaves, label=grp.label))
@@ -466,8 +476,13 @@ def build_aircraft_assembly(design: AircraftDesign, wing_structure, component_bo
                                                                          design.dihedral_deg)
     fus = build_fuselage(design.stations, former_x_mm=_former_x(design.stations))
     z_t = design.stations[-1].z_center_mm
-    ht = build_htail(design.tail.htail, design.tail.x_htail_le_mm, z_t)
-    vt = build_vtail(design.tail.vtail, design.tail.x_vtail_le_mm, z_t)
+    if design.tail_structure is not None:
+        from engineering.analysis.tail_structure import tail_assembly
+
+        ht, vt = tail_assembly(design.tail_structure, design)
+    else:
+        ht = build_htail(design.tail.htail, design.tail.x_htail_le_mm, z_t)
+        vt = build_vtail(design.tail.vtail, design.tail.x_vtail_le_mm, z_t)
     children = [wing, fus, ht, vt]
     if component_boxes:
         sys_parts = []

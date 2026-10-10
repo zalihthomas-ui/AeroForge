@@ -1087,9 +1087,43 @@ and mesh-converged < 1 %. 33 new tests.
 Result: 12.0 kg, payload capacity 5.33 kg, CG 46.6 % MAC, NP 412.4 mm, SM 10.0 %, trim α 2.71°,
 elevator −2.10° (VLM equivalent −0.23°), 84-part STEP assembly.
 
-## Next milestone: v0.16 (candidates)
+## Milestone: v0.16 — detail design: dynamics, built-up tails, joints, close-up FE (DONE)
 
-Dynamic stability (short period, phugoid, Dutch roll) from aerosandbox stability derivatives;
-lateral-directional sizing of the fin; propeller/slipstream and thrust-line effects; a real weight
-budget with component tolerances and CG envelope (forward/aft limits over payload/battery cases);
-tail structure (spars, hinges) and a fuselage FE check; landing gear or launch/recovery loads.
+- `engineering/analysis/propulsion.py` — actuator-disk propeller, slipstream immersion and tail
+  dynamic-pressure ratio, thrust-line moment, propeller normal-force ΔCmα.
+- `engineering/analysis/flight_dynamics.py` — CAD inertia tensor, VLM downwash, power-on trim and
+  neutral point, small-perturbation longitudinal/lateral models (Ixz primed derivatives), mode
+  identification, MIL-F-8785C Level 1 checks, dihedral sized for the spiral mode, control authority,
+  `design_flight_ready` (accepts built-up tails).
+- `engineering/analysis/tail_structure.py` — CS-23-style tail loads (manoeuvre, 23.425 / 23.443
+  gusts), Schrenk distribution, sized tail boxes, CalculiX check, built-up tail CAD (swept fin via
+  `WingStructureSpec.sweep_le_deg`), CAD-measured tail masses.
+- `agents/structures/stiffened_panel.py`, `joints.py`, `detail_fe.py`,
+  `engineering/analysis/detail_design.py` — stringer-stiffened covers, riveted spar flanges, bonded
+  stringers (Volkersen), rib checks; five close-up CalculiX models (open hole, notches/mousehole,
+  bonded lap, stiffened panel and rib-web buckling) each checked against its hand method.
+- `agents/geometry/wing_structure.py` `StructureDetails` — C-channel spars, stringers with run-outs and
+  anti-peel rivets, ribs split at the spars with mouseholes, spar-flange notches, flanged lightening
+  holes, bonded rib flanges, rivet rows.
+- `examples/aircraft/detailed_aircraft.py`, `docs/tutorials/detail-design.md`.
+
+### Decision record
+
+- **Stringers must fit the ribs**: leg + 1 mm ≤ 35 % of the bay's box depth (both caps are
+  notched), stringer count non-increasing outboard, and the bonding land must pass the full stringer
+  load (Volkersen) — so the 11-15 mm deep tail boxes stay unstiffened.
+- **CalculiX `*BUCKLE` lists only factors > 1** in this build (0.54 was reported as 1.05): all
+  buckling runs solve at 0.1 × load and scale back (`BUCKLE_REFERENCE_SCALE`).
+- **Wing-location bug**: leaves of moved sub-assemblies were exported/measured in local coordinates
+  (the v0.15 video drew the wing at x = 0); `cad.exporters.world_shape` now applies the parents'
+  transform to the raw OCC shape (also avoiding a deep copy of the assembly tree).
+- **Masses close the loop**: detailed wing 1.14 kg (was 1.52), tails 0.247 + 0.094 kg (foam estimates
+  0.128 + 0.056) → wing re-placed 63 mm aft, power-on SM 10.1 %, dihedral 3.5°, all modes Level 1;
+  tail loads on the final design change < 1 %.
+
+## Next milestone: v0.17 (candidates)
+
+CG envelope over payload/battery cases and a weight budget with tolerances; fuselage FE (boom
+bending/torsion from tail loads) and the wing-fuselage attachment (lugs, bolts); fastener
+flexibility / load sharing; fatigue of the riveted joints; landing or launch/recovery loads;
+gust response in the time domain with the linear models.

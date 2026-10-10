@@ -92,9 +92,11 @@ def mass_properties(design: AircraftDesign, structure) -> MassProperties:
     """CG and inertia tensor of the whole aircraft from its CAD solids + component masses."""
     ac = build_aircraft_assembly(design, structure)
     items = {i.name: i for i in design.mass_items}
+    from agents.geometry.wing_structure import GROUP_LABELS
+
     wing_density = structure.densities
-    sub_key = {"Ribs": "ribs", "Spars": "spars", "BoxCovers": "box covers", "LeadingEdgeSkin": "leading-edge skin",
-               "TrailingEdgeSkin": "trailing-edge skin"}
+    sub_key = {v: k for k, v in GROUP_LABELS.items()}
+    tails = design.tail_structure
     groups: dict[str, list] = {}
 
     def walk(shape, path):
@@ -103,7 +105,7 @@ def mass_properties(design: AircraftDesign, structure) -> MassProperties:
             for k in kids:
                 walk(k, [*path, shape.label])
             return
-        groups.setdefault(_mass_group(path, shape.label), []).append(world_shape(shape))
+        groups.setdefault(_mass_group(path, shape.label, tails is not None), []).append(world_shape(shape))
 
     walk(ac, [])
     masses, solids = [], []
@@ -112,6 +114,13 @@ def mass_properties(design: AircraftDesign, structure) -> MassProperties:
         if key.startswith("wing:"):
             dens = wing_density[sub_key[key.split(":", 1)[1]]]
             ms = vols * 1e-9 * dens
+        elif key.startswith(("htail:", "vtail:")):
+            surf = tails.htail if key.startswith("htail:") else tails.vtail
+            sub = key.split(":", 1)[1].removeprefix("Fin")
+            if sub in sub_key:  # built-up structure group: its own density
+                ms = vols * 1e-9 * surf.structure.densities[sub_key[sub]]
+            else:  # elevator / rudder (foam + glass): one surface's mass spread by volume
+                ms = surf.control_surface_mass_kg * vols / vols.sum()
         else:
             total = {"fuselage_skin": items["Fuselage skin"].mass_kg, "formers": items["Formers"].mass_kg,
                      "htail": items["Horizontal tail"].mass_kg, "vtail": items["Vertical tail"].mass_kg}.get(key)
@@ -138,16 +147,18 @@ def mass_properties(design: AircraftDesign, structure) -> MassProperties:
     return MassProperties(m_tot, cg, inertia)
 
 
-def _mass_group(path, label):
+def _mass_group(path, label, built_up_tails: bool = False):
     if "Wing" in path:
         sub = path[path.index("Wing") + 1] if len(path) > path.index("Wing") + 1 else label
         return f"wing:{sub}"
     if "Fuselage" in path:
         return "formers" if label.startswith("Former") else "fuselage_skin"
-    if "HorizontalTail" in path:
-        return "htail"
-    if "VerticalTail" in path:
-        return "vtail"
+    for name, key in (("HorizontalTail", "htail"), ("VerticalTail", "vtail")):
+        if name in path:
+            if not built_up_tails:
+                return key
+            i = path.index(name)
+            return f"{key}:{path[i + 1] if len(path) > i + 1 else label}"
     return f"system:{label}"
 
 
@@ -618,7 +629,7 @@ def size_dihedral(d: AircraftDesign, structure, mass: MassProperties, spiral_t2_
     return gamma, sorted(hist)
 
 
-def design_flight_ready(campaign, structure, sm_power_on_target: float = 0.10, iterations: int = 2):
+def design_flight_ready(campaign, structure, sm_power_on_target: float = 0.10, iterations: int = 2, tails=None):
     """v0.16 layout: split battery packs around a CG-centred payload bay, wing placed for the POWER-ON static
     margin (propeller normal force and slipstream included), dihedral sized for the spiral criterion.
 
@@ -631,8 +642,15 @@ def design_flight_ready(campaign, structure, sm_power_on_target: float = 0.10, i
     history = []
     d = fd = mp = None
     gamma = 0.0
+    tail_masses = None
+    if tails is not None:
+        from engineering.analysis.tail_structure import tail_mass_items
+
+        tail_masses = tail_mass_items(tails)
     for _ in range(iterations):
-        d = design_aircraft(campaign, structure.masses_kg(), payload_at_empty_cg=True, sm_target=target)
+        d = design_aircraft(campaign, structure.masses_kg(), payload_at_empty_cg=True, sm_target=target,
+                            tail_masses=tail_masses)
+        d.tail_structure = tails
         d.dihedral_deg = gamma
         mp = mass_properties(d, structure)
         fd = analyze_flight_dynamics(d, structure, mass=mp)

@@ -40,6 +40,10 @@ from agents.structures.inp_utils import format_nset_lines
 from agents.structures.wing_box import BoxThickness, Material, WingBoxGeometry
 
 _CCX_TIMEOUT_S = 600
+# This ccx build's *BUCKLE only reports buckling factors > 1 (found in v0.16: a plate whose true factor was
+# 0.54 reported 1.05, its third mode). Solving at a reduced reference load and scaling back captures every
+# factor > BUCKLE_REFERENCE_SCALE; the mode shapes are unchanged.
+BUCKLE_REFERENCE_SCALE = 0.1
 
 
 class WingBoxFEError(RuntimeError):
@@ -468,9 +472,10 @@ def run_wing_box_fe(
     ys = np.array([mesh.row_y_mm[r] for r in rows])
     syy = np.array([stress[mesh.top_cover_mid[r]][1] for r in rows])
 
-    bk = run_ccx(ccx_path, write_deck(mesh, material, "buckle", forces, n_modes=n_buckling_modes), "buckle",
+    scaled = {n: f * BUCKLE_REFERENCE_SCALE for n, f in forces.items()}
+    bk = run_ccx(ccx_path, write_deck(mesh, material, "buckle", scaled, n_modes=n_buckling_modes), "buckle",
                  work_dir=base)
-    factors = parse_buckling_factors(bk.dat_text)
+    factors = [f * BUCKLE_REFERENCE_SCALE for f in parse_buckling_factors(bk.dat_text)]
     bmodes = read_frd_displacements(bk.frd_path)[1:]  # block 0 is the static base state
 
     fq = run_ccx(ccx_path, write_deck(mesh, material, "frequency", n_modes=n_frequency_modes), "frequency",

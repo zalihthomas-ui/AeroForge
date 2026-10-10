@@ -26,6 +26,15 @@ The full mission, philosophy, and long-term roadmap are documented in
 This repository is built **vertically**, one complete engineering loop at a
 time (see `docs/architecture/roadmap.md`).
 
+**New in v0.16 — detail design and dynamics** (`python examples/aircraft/detailed_aircraft.py`, see
+[`docs/tutorials/detail-design.md`](docs/tutorials/detail-design.md)): built-up tails from CS-23-style
+tail loads; stringer-stiffened wing covers (cover mass 0.443 → 0.239 kg per semispan); C-channel spars
+with riveted flanges, bonded stringers with anti-peel rivets, ribs with mouseholes, spar-flange notches
+and flanged lightening holes — every hand method checked by a close-up CalculiX model (open-hole and
+notch Kt, bonded lap vs Volkersen, stiffened-panel and rib-web buckling). The CAD-measured masses go back
+into the balance: power-on static margin 10.1 % with propeller slipstream, thrust line and VLM downwash,
+and all five dynamic modes meet MIL-F-8785C Level 1.
+
 **New in v0.15 — the whole aircraft** (`python examples/aircraft/design_aircraft.py`, see
 [`docs/tutorials/whole-aircraft.md`](docs/tutorials/whole-aircraft.md)): the v0.14 wing grows a
 fuselage sized around its systems and a tail sized by tail-volume coefficients; mass & balance
