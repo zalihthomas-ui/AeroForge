@@ -28,7 +28,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
-import numpy as np
 from scipy.optimize import brentq
 
 from agents.powertrain.spec import EngineSpec
@@ -163,8 +162,13 @@ def size_rod(spec: EngineSpec, base: ISection, loads: RodLoads, min_fatigue_sf: 
         return min(c.fatigue_sf / min_fatigue_sf, c.buckling_sf / min_buckling_sf) - 1.0
 
     lo, hi = 0.3, 3.0
+    xtol = 1e-4
     if margin(hi) < 0:
         raise ValueError("even a 3x scaled section cannot meet the targets")
-    k = brentq(margin, lo, hi, xtol=1e-4) if margin(lo) < 0 else lo
-    k = float(np.nextafter(k, np.inf))
+    if margin(lo) >= 0:
+        return check_rod(spec, base.scaled(lo), loads, mat), lo
+    k = float(brentq(margin, lo, hi, xtol=xtol))
+    # brentq's root may sit just on the infeasible side (within xtol): step to the feasible side
+    while margin(k) < 0:
+        k += xtol
     return check_rod(spec, base.scaled(k), loads, mat), k
